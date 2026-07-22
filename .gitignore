@@ -7,3 +7,6 @@ venv/
 
 # Example output
 output/
+
+# Codex review artifacts (local only)
+.codex-review/

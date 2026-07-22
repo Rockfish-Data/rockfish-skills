@@ -1,3 +1,5 @@
 --find-links https://packages.rockfish.ai
 rockfish[labs]
 matplotlib
+snowflake-connector-python[pandas]  # snowflake-analyst skill
+tomli; python_version < "3.11"      # snowflake-analyst: tomllib backport
