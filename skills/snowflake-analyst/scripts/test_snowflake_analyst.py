@@ -172,6 +172,19 @@ class TestExportGuard(unittest.TestCase):
         self.assertIsNone(self._reason(byte_size=None, row_count=None, stream=True))
 
 
+class TestColumnFolding(unittest.TestCase):
+    def test_unquoted_folds_upper(self):
+        self.assertEqual(sa.resolve_column("amount"), "AMOUNT")
+        self.assertEqual(sa.resolve_column("  Total  "), "TOTAL")
+
+    def test_quoted_preserves_case(self):
+        self.assertEqual(sa.resolve_column('"amount"'), "amount")
+
+    def test_matches_table_name_folding(self):
+        # Columns and table names must fold identically.
+        self.assertEqual(sa.resolve_column("amount"), sa.parse_table_ref("amount").name)
+
+
 class TestProfileFlags(unittest.TestCase):
     def test_numeric_is_orderable_and_numeric(self):
         self.assertEqual(sa.profile_flags("NUMBER"), (True, True))

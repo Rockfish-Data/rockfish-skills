@@ -254,6 +254,16 @@ def resolve_default(value):
     return _resolve_ident(*_parse_ident_parts(value)[0])
 
 
+def resolve_column(name: str) -> str:
+    """Fold a single column identifier to its stored form, like table names.
+
+    Unquoted → upper-case (how Snowflake stores unquoted DDL columns), quoted →
+    verbatim. So --columns amount hits AMOUNT, and --columns '"amount"' hits a
+    quoted lower-case column.
+    """
+    return _resolve_ident(*_parse_ident_parts(name.strip())[0])
+
+
 class TableRef:
     """A parsed table reference with Snowflake identifier folding applied.
 
@@ -508,12 +518,20 @@ def cmd_profile(args) -> None:
         if cols_df.empty:
             raise SystemExit(f"Table not found or no columns: {args.table}")
 
-        wanted = args.columns.split(",") if args.columns else None
+        # Fold requested column names the same way table identifiers are folded,
+        # then match against the stored INFORMATION_SCHEMA names.
+        wanted = {resolve_column(c) for c in args.columns.split(",")} if args.columns else None
         rows = []
         for _, r in cols_df.iterrows():
-            if wanted and r["COLUMN_NAME"] not in wanted:
+            if wanted is not None and r["COLUMN_NAME"] not in wanted:
                 continue
             rows.append((r["COLUMN_NAME"], str(r["DATA_TYPE"]).upper()))
+        if wanted is not None and not rows:
+            available = ", ".join(cols_df["COLUMN_NAME"].astype(str))
+            raise SystemExit(
+                f"None of --columns {args.columns!r} match {args.table} "
+                f"(names are case-sensitive; unquoted folds to upper). Available: {available}"
+            )
         if args.max_columns and len(rows) > args.max_columns:
             print(
                 f"(profiling first {args.max_columns} of {len(rows)} columns; "
@@ -821,7 +839,7 @@ def cmd_export(args) -> None:
                 "or reduce with a smaller --limit/--sample."
             )
 
-        cols = ", ".join(quote_ident(c.strip()) for c in args.columns.split(",")) if args.columns else "*"
+        cols = ", ".join(quote_ident(resolve_column(c)) for c in args.columns.split(",")) if args.columns else "*"
         sql = f"SELECT {cols} FROM {ref.sql}"
         if args.sample:
             sql += f" SAMPLE ({int(args.sample)} ROWS)"

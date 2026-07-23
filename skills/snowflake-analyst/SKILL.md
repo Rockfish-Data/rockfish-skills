@@ -172,10 +172,13 @@ Add `--format json` (or `csv`) to any command for machine-readable output.
 
 ## Gotchas
 
-- **Identifier case.** Snowflake folds unquoted names to upper case; tables written
-  by tools like the Rockfish connector are often stored **quoted and lower-case**.
-  The tool quotes identifiers it generates. In hand-written `query` SQL, quote
-  case-sensitive columns yourself: `SELECT "amount" FROM ...`.
+- **Identifier case.** The tool follows Snowflake's own rule for every identifier
+  it takes — table names *and* `--columns`: an **unquoted** name folds to
+  UPPER-CASE (`orders` → `ORDERS`, `--columns amount` → `AMOUNT`), a **quoted** one
+  is taken verbatim. So standard tables just work with lower-case input, and
+  case-sensitive lower-case names (e.g. tables written by the Rockfish connector)
+  need quotes: `describe '"myTable"'`, `--columns '"amount"'`. In hand-written
+  `query` SQL you quote case-sensitive identifiers yourself: `SELECT "amount" ...`.
 - **Qualify tables** as `DB.SCHEMA.TABLE`, or pass `--database`/`--schema`. A bare
   name only resolves if the connection has a database/schema context.
 - **`query` is read-only** by design: it rejects anything that isn't a single
