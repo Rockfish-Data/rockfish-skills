@@ -612,19 +612,59 @@ def _strip_leading_comments(stmt: str) -> str:
             return b
 
 
+def mask_sql(sql: str) -> str:
+    """Return SQL with string/identifier/comment content blanked to spaces.
+
+    Same length as the input, but everything inside single-quoted strings,
+    double-quoted identifiers, dollar-quoted bodies, and line/block comments is
+    replaced by spaces. That leaves only *code* — keywords, punctuation, and
+    top-level `;` — so semicolons and keywords can be inspected without being
+    fooled by a `;` in a literal or an `AS PROCEDURE` inside a comment/string.
+    """
+    out, i, n = [], 0, len(sql)
+    while i < n:
+        c, two = sql[i], sql[i:i + 2]
+        if two == "--":
+            j = sql.find("\n", i)
+            j = n if j == -1 else j
+        elif two == "/*":
+            j = sql.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+        elif c in "'\"":
+            j = i + 1
+            while j < n:
+                if sql[j] == c:
+                    if j + 1 < n and sql[j + 1] == c:  # doubled = escaped
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+        elif c == "$" and (m := re.match(r"\$[A-Za-z0-9_]*\$", sql[i:])):
+            tag = m.group(0)
+            k = sql.find(tag, i + len(tag))
+            j = n if k == -1 else k + len(tag)
+        else:
+            out.append(c)
+            i += 1
+            continue
+        out.append(" " * (j - i))
+        i = j
+    return "".join(out)
+
+
 def _assert_read_only(sql: str):
     """Reject anything that isn't a single read statement.
 
-    Guards against accidental writes and multi-statement injection. Returns the
-    comment-stripped statement and its verb, so callers don't re-derive the verb
-    from the raw (possibly comment-led) text.
+    Guards against accidental writes and multi-statement injection. Works off a
+    masked copy (literals/comments blanked) so a `;` or keyword inside a string or
+    comment can't fool the checks. Returns the comment-stripped statement and its
+    verb.
     """
-    statements = [s for s in sql.split(";") if s.strip()]
-    if len(statements) > 1:
+    masked = mask_sql(sql)
+    if len([s for s in masked.split(";") if s.strip()]) > 1:
         raise SystemExit("Only a single statement is allowed (found multiple ';'-separated).")
-    stmt = statements[0].strip() if statements else ""
-    body = _strip_leading_comments(stmt)
-    verb = body.split(None, 1)[0].upper() if body else ""
+    verb = masked.split(None, 1)[0].upper() if masked.strip() else ""
     if verb not in _READ_VERBS:
         raise SystemExit(
             f"Refusing to run a non-read statement (starts with {verb or 'nothing'!r}). "
@@ -632,13 +672,15 @@ def _assert_read_only(sql: str):
         )
     # A `WITH` statement is normally a CTE, but Snowflake also has the anonymous
     # stored-procedure form `WITH <name> AS PROCEDURE ... CALL <name>()`, whose
-    # body can run DML. The `AS PROCEDURE` token pair is distinctive to that form,
-    # so reject it rather than trying to fully parse the WITH clause.
-    if re.search(r"\bAS\s+PROCEDURE\b", body, re.IGNORECASE):
+    # body can run DML. `AS PROCEDURE` is distinctive to that form; checking the
+    # masked SQL means comments between the tokens (AS /*x*/ PROCEDURE) can't hide
+    # it. This guard is best-effort — see the note below — not a security boundary.
+    if re.search(r"\bAS\s+PROCEDURE\b", masked, re.IGNORECASE):
         raise SystemExit(
             "Refusing an anonymous stored-procedure form (WITH ... AS PROCEDURE ... "
             "CALL), which can execute writes. Only read queries are allowed."
         )
+    body = _strip_leading_comments(sql.strip())
     return body, verb
 
 
@@ -797,8 +839,9 @@ def export_guard_reason(*, byte_size, row_count, max_mb, max_rows, limit, sample
     """
     if force or stream:
         return None
-    # Smallest positive row bound requested via --limit/--sample (None = none).
-    bounds = [b for b in (limit, sample) if b is not None and b > 0]
+    # Smallest row bound requested via --limit/--sample (None = none). 0 is a
+    # real bound (fetch nothing), so include it; negatives are nonsense, drop them.
+    bounds = [b for b in (limit, sample) if b is not None and b >= 0]
     bound = min(bounds) if bounds else None
 
     effective_rows = row_count
@@ -864,11 +907,11 @@ def cmd_export(args) -> None:
 
         cols = ", ".join(quote_ident(resolve_column(c)) for c in args.columns.split(",")) if args.columns else "*"
         sql = f"SELECT {cols} FROM {ref.sql}"
-        if args.sample:
+        if args.sample is not None:  # is not None: --sample 0 is a valid request
             sql += f" SAMPLE ({int(args.sample)} ROWS)"
         if args.where:
             sql += f" WHERE {args.where}"
-        if args.limit:
+        if args.limit is not None:  # is not None: --limit 0 must emit LIMIT 0
             sql += f" LIMIT {int(args.limit)}"
         cur.execute(sql)
         if args.stream:

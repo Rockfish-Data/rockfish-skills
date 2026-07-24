@@ -73,6 +73,12 @@ python $S import gen.csv MYDB.PUBLIC.CUSTOMERS --mode replace  # drop & recreate
   whole file in memory and refuses sources over `--max-mb`; `--stream` reads it in
   bounded row chunks (200k, or `--chunk-size`). In `--mode replace` only the first
   chunk overwrites; the rest append, so the file isn't truncated.
+- **`--stream --mode replace` is not atomic.** The first chunk drops and recreates
+  the table (inferring column types from *that* chunk); if a later chunk fails —
+  e.g. a column that looked numeric turns out to hold text further down — the
+  original table is already gone and you're left with a partial load. For a
+  critical replace of untrusted data, import to a temporary table and swap it in
+  yourself, or use non-stream `--mode replace` (single write) when the file fits.
 - **It writes to the user's account.** `import` (and `export`) are the only
   state-changing paths; confirm the destination `DB.SCHEMA.TABLE` and mode before
   running one. Everything else in this skill is read-only.
@@ -182,9 +188,13 @@ Add `--format json` (or `csv`) to any command for machine-readable output.
 - **Qualify tables** as `DB.SCHEMA.TABLE`, or pass `--database`/`--schema`. A bare
   name only resolves if the connection has a database/schema context.
 - **`query` is read-only** by design: it rejects anything that isn't a single
-  `SELECT`/`WITH`/`SHOW`/`DESCRIBE`/`EXPLAIN`, refuses multiple statements, and
-  rejects the anonymous stored-procedure form (`WITH … AS PROCEDURE … CALL`),
-  which can run writes despite starting with `WITH`.
+  `SELECT`/`WITH`/`SHOW`/`DESCRIBE`/`EXPLAIN`, refuses multiple statements (aware
+  of `;` inside strings/comments), and rejects the anonymous stored-procedure
+  form (`WITH … AS PROCEDURE … CALL`) that can write despite starting with `WITH`.
+  This check is **best-effort — a guard against honest mistakes, not a security
+  boundary.** For a hard guarantee, point `--connection` at a Snowflake **role
+  with only read grants** (`SELECT`/`USAGE`); then no query can mutate data
+  regardless of what the tool does.
 - **`ROW_COUNT`/`BYTES` are null for views** — the `export` size guard can't gauge
   a view, so it treats an unshrunk view export as needing `--force`.
 - The script file is intentionally **not** named `snowflake.py`; that would shadow

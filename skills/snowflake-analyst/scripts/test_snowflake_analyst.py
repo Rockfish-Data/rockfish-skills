@@ -128,6 +128,43 @@ class TestReadOnly(unittest.TestCase):
         with self.assertRaises(SystemExit):
             sa._assert_read_only("with p as  procedure returns int as x call p()")
 
+    def test_rejects_comment_separated_procedure(self):
+        # A comment between AS and PROCEDURE must not hide the anonymous proc form.
+        with self.assertRaises(SystemExit):
+            sa._assert_read_only("WITH p AS /*x*/ PROCEDURE RETURNS INT AS y CALL p()")
+
+    def test_semicolon_in_string_literal_is_one_statement(self):
+        body, verb = sa._assert_read_only("SELECT 'a;b' AS c")
+        self.assertEqual(verb, "SELECT")
+        self.assertEqual(body, "SELECT 'a;b' AS c")
+
+    def test_semicolon_in_comment_is_one_statement(self):
+        _, verb = sa._assert_read_only("SELECT 1 -- drop; me\n")
+        self.assertEqual(verb, "SELECT")
+
+    def test_as_procedure_inside_string_is_not_flagged(self):
+        # A literal that merely contains the words must not trip the guard.
+        _, verb = sa._assert_read_only("SELECT 'as procedure' AS note")
+        self.assertEqual(verb, "SELECT")
+
+    def test_still_rejects_real_multi_statement(self):
+        with self.assertRaises(SystemExit):
+            sa._assert_read_only("SELECT 1; SELECT 2")
+
+
+class TestMaskSql(unittest.TestCase):
+    def test_blanks_string_and_comment_keeps_length(self):
+        sql = "SELECT 'a;b' /* c; */ FROM t"
+        masked = sa.mask_sql(sql)
+        self.assertEqual(len(masked), len(sql))
+        self.assertNotIn(";", masked)          # semicolons were inside literal/comment
+        self.assertIn("SELECT", masked)
+        self.assertIn("FROM t", masked)
+
+    def test_dollar_quoted_body_blanked(self):
+        masked = sa.mask_sql("SELECT $$a;b$$ x")
+        self.assertNotIn(";", masked)
+
 
 class TestAutoLimit(unittest.TestCase):
     def test_wraps_select(self):
@@ -186,6 +223,10 @@ class TestExportGuard(unittest.TestCase):
     def test_force_and_stream_bypass(self):
         self.assertIsNone(self._reason(byte_size=None, row_count=None, force=True))
         self.assertIsNone(self._reason(byte_size=None, row_count=None, stream=True))
+
+    def test_limit_zero_is_a_valid_bound(self):
+        # --limit 0 fetches nothing, so a huge table is allowed (0 rows).
+        self.assertIsNone(self._reason(byte_size=2 * 1024 ** 3, row_count=6_000_000, limit=0))
 
 
 class TestColumnFolding(unittest.TestCase):
