@@ -112,6 +112,22 @@ class TestReadOnly(unittest.TestCase):
         with self.assertRaises(SystemExit):
             sa._assert_read_only("SELECT 1; SELECT 2")
 
+    def test_accepts_normal_cte(self):
+        _, verb = sa._assert_read_only("WITH x AS (SELECT 1 AS n) SELECT * FROM x")
+        self.assertEqual(verb, "WITH")
+
+    def test_rejects_anonymous_procedure(self):
+        # WITH ... AS PROCEDURE ... CALL can run DML despite the WITH verb. Use a
+        # semicolon-free form so the AS PROCEDURE guard (not the multi-statement
+        # guard) is what rejects it.
+        sql = "WITH p() AS PROCEDURE RETURNS INT AS $$ BEGIN RETURN 1 END $$ CALL p()"
+        with self.assertRaises(SystemExit):
+            sa._assert_read_only(sql)
+
+    def test_procedure_guard_is_case_and_space_insensitive(self):
+        with self.assertRaises(SystemExit):
+            sa._assert_read_only("with p as  procedure returns int as x call p()")
+
 
 class TestAutoLimit(unittest.TestCase):
     def test_wraps_select(self):
@@ -183,6 +199,18 @@ class TestColumnFolding(unittest.TestCase):
     def test_matches_table_name_folding(self):
         # Columns and table names must fold identically.
         self.assertEqual(sa.resolve_column("amount"), sa.parse_table_ref("amount").name)
+
+
+class TestWriteLocation(unittest.TestCase):
+    def test_both_present(self):
+        self.assertEqual(sa.write_location("DB", "SCH"), ("DB", "SCH"))
+
+    def test_db_without_schema_dropped(self):
+        # write_pandas needs a schema with a database; drop the lone database.
+        self.assertEqual(sa.write_location("DB", None), (None, None))
+
+    def test_schema_without_db(self):
+        self.assertEqual(sa.write_location(None, "SCH"), (None, "SCH"))
 
 
 class TestProfileFlags(unittest.TestCase):

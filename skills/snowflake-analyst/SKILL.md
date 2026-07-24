@@ -182,7 +182,9 @@ Add `--format json` (or `csv`) to any command for machine-readable output.
 - **Qualify tables** as `DB.SCHEMA.TABLE`, or pass `--database`/`--schema`. A bare
   name only resolves if the connection has a database/schema context.
 - **`query` is read-only** by design: it rejects anything that isn't a single
-  `SELECT`/`WITH`/`SHOW`/`DESCRIBE`/`EXPLAIN`, and refuses multiple statements.
+  `SELECT`/`WITH`/`SHOW`/`DESCRIBE`/`EXPLAIN`, refuses multiple statements, and
+  rejects the anonymous stored-procedure form (`WITH … AS PROCEDURE … CALL`),
+  which can run writes despite starting with `WITH`.
 - **`ROW_COUNT`/`BYTES` are null for views** — the `export` size guard can't gauge
   a view, so it treats an unshrunk view export as needing `--force`.
 - The script file is intentionally **not** named `snowflake.py`; that would shadow

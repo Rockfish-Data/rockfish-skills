@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 try:
@@ -262,6 +263,16 @@ def resolve_column(name: str) -> str:
     quoted lower-case column.
     """
     return _resolve_ident(*_parse_ident_parts(name.strip())[0])
+
+
+def write_location(db, schema):
+    """(database, schema) to hand write_pandas.
+
+    The connector requires a schema whenever a database is given, so a lone
+    database (bare table + --database, no --schema) is dropped — the session that
+    connect() opened already has that database selected, plus its default schema.
+    """
+    return (db if schema else None), schema
 
 
 class TableRef:
@@ -619,6 +630,15 @@ def _assert_read_only(sql: str):
             f"Refusing to run a non-read statement (starts with {verb or 'nothing'!r}). "
             f"Allowed: {', '.join(_READ_VERBS)}."
         )
+    # A `WITH` statement is normally a CTE, but Snowflake also has the anonymous
+    # stored-procedure form `WITH <name> AS PROCEDURE ... CALL <name>()`, whose
+    # body can run DML. The `AS PROCEDURE` token pair is distinctive to that form,
+    # so reject it rather than trying to fully parse the WITH clause.
+    if re.search(r"\bAS\s+PROCEDURE\b", body, re.IGNORECASE):
+        raise SystemExit(
+            "Refusing an anonymous stored-procedure form (WITH ... AS PROCEDURE ... "
+            "CALL), which can execute writes. Only read queries are allowed."
+        )
     return body, verb
 
 
@@ -713,7 +733,10 @@ def cmd_import(args) -> None:
                 "held in memory (~3-5x that). Re-run with --stream (bounded memory) or --force."
             )
     ref = table_ref(args.table, args)
-    db, schema, tbl = ref.db, ref.schema, ref.name
+    tbl = ref.name
+    # write_pandas needs a schema whenever a database is passed; drop a lone
+    # database and let the session (which connect() set from --database) supply it.
+    write_db, write_schema = write_location(ref.db, ref.schema)
     overwrite = args.mode == "replace"
     dest = ref.sql
     # quote_identifiers=True preserves the source header's case in the created
@@ -727,7 +750,7 @@ def cmd_import(args) -> None:
                 if chunk.empty:
                     continue
                 success, _, nrows, _ = write_pandas(
-                    con, chunk, tbl, database=db, schema=schema,
+                    con, chunk, tbl, database=write_db, schema=write_schema,
                     auto_create_table=True,
                     overwrite=overwrite and first,  # only the first chunk replaces
                     quote_identifiers=True,
@@ -748,7 +771,7 @@ def cmd_import(args) -> None:
             raise SystemExit(f"{path} has no rows to load.")
         success, nchunks, nrows, _ = write_pandas(
             con, df, tbl,
-            database=db, schema=schema,
+            database=write_db, schema=write_schema,
             auto_create_table=True,
             overwrite=overwrite,
             quote_identifiers=True,
