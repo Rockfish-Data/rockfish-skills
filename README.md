@@ -1,4 +1,4 @@
-# tacklebox
+# Summary
 
 A collection of [Claude Skills](https://claude.com/skills) for the [Rockfish](https://www.rockfish.ai/) SDK — a Python SDK for generating synthetic data.
 
