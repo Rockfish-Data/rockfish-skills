@@ -1,12 +1,12 @@
-# Contributing to tacklebox
+# Contributing to rockfish-skills
 
 Thanks for your interest in contributing.
 
 ## Setting up
 
 ```bash
-git clone https://github.com/Rockfish-Data/tacklebox.git
-cd tacklebox
+git clone https://github.com/Rockfish-Data/rockfish-skills.git
+cd rockfish-skills
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
