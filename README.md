@@ -38,36 +38,39 @@ claude plugin install rockfish-skills@rockfish-skills --scope user -y
 
 ### Option B — Symlink into your personal skills directory
 
-Clone the repo, then run the install script. It symlinks each skill into `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills`), so a later `git pull` upgrades every installed skill in place.
+Clone the repo, then symlink each skill into `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills`). Symlinks mean a later `git pull` upgrades every installed skill in place — nothing to re-run.
 
 ```bash
 git clone https://github.com/Rockfish-Data/rockfish-skills.git
 cd rockfish-skills
-scripts/install-skills.sh
+mkdir -p ~/.claude/skills
+for skill in skills/*/; do
+  ln -s "$PWD/$skill" ~/.claude/skills/"$(basename "$skill")"
+done
 ```
 
-Useful flags:
+`ln -s` refuses to overwrite an existing `~/.claude/skills/<name>`, so it won't clobber a skill you already have — remove or rename the conflict first if you hit one. Restart your agent (or start a new session) to pick up the change.
+
+To remove them, delete the symlinks (this only removes the links, never your clone):
 
 ```bash
-scripts/install-skills.sh --list            # show what would be installed
-scripts/install-skills.sh --project DIR     # install into DIR/.claude/skills instead of your home dir
-scripts/install-skills.sh --copy            # copy instead of symlink (no auto-upgrade)
-scripts/install-skills.sh --uninstall       # remove the skills this repo installed
+rm ~/.claude/skills/generate-from-schema \
+   ~/.claude/skills/inject-scenarios \
+   ~/.claude/skills/snowflake-analyst
 ```
-
-Restart your agent (or start a new session) to pick up the change.
 
 ### Option C — Project skills (commit into a repo)
 
-To make the skills available to everyone working in a specific repository — including cloud sessions (claude.ai / Cowork / routines), which can't see your local `~/.claude/skills` — install them into that repo's `.claude/skills/` and commit them:
+To make the skills available to everyone working in a specific repository — including cloud sessions (claude.ai / Cowork / routines), which can't see your local `~/.claude/skills` — copy them into that repo's `.claude/skills/` and commit them:
 
 ```bash
-# from inside the target repo, with this repo cloned alongside it
-../rockfish-skills/scripts/install-skills.sh --project . --copy
+# from inside the target repo, with rockfish-skills cloned alongside it
+mkdir -p .claude/skills
+cp -R ../rockfish-skills/skills/* .claude/skills/
 git add .claude/skills && git commit -m "Add Rockfish skills"
 ```
 
-Use `--copy` (not a symlink) here so the skills travel with the repo.
+Copy (don't symlink) here so the skills travel with the repo. Note: the `generate-from-schema` and `inject-scenarios` skills link to `../../examples/...` as worked references; from a committed copy those resolve to `.claude/examples/`, so copy [`examples/`](examples/) there too if you want those references to open. To upgrade later, `git pull` in the clone and re-run the `cp -R` above.
 
 ### Claude Desktop and claude.ai
 
@@ -84,7 +87,7 @@ The same `SKILL.md` skills work in the Claude Desktop app and on claude.ai/code,
 | --- | --- |
 | Option A — plugin | `/plugin marketplace update rockfish-skills` (in a session), or `claude plugin marketplace update rockfish-skills` |
 | Option B — symlink | `git pull` in your clone — symlinks point at the repo, so skills update in place |
-| Option B — `--copy` / Option C | `git pull`, then re-run `scripts/install-skills.sh` (with the same flags) to refresh the copies |
+| Option C — copied into a repo | `git pull` in the clone, then re-run the `cp -R` to refresh the copies |
 
 ---
 

@@ -35,13 +35,9 @@ A `SKILL.md` needs:
 
 Keep `SKILL.md` short. Push detail into companion files or the linked example script.
 
-A new `skills/<skill-name>/` directory is picked up automatically by every install method — the plugin (it bundles everything under `skills/`) and `scripts/install-skills.sh` (it installs every directory containing a `SKILL.md`). No manifest to edit. Bump the `version` in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) and [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) when you ship a change so plugin users get the update prompt.
+A new `skills/<skill-name>/` directory is picked up automatically by every install method in the [README](README.md#install-the-skills) — the plugin bundles everything under `skills/`, and the manual symlink/copy steps loop over whatever directories are there. No manifest to edit. Bump the `version` in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) and [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) when you ship a change so plugin users get the update prompt.
 
-After adding or editing a skill, install it locally and start a fresh session to sanity-check that the agent surfaces it:
-
-```bash
-scripts/install-skills.sh
-```
+After adding or editing a skill, symlink it into `~/.claude/skills/` (see the README) and start a fresh session to sanity-check that the agent surfaces it.
 
 ## Pull requests
 
