@@ -1,47 +1,127 @@
-# Summary
+# Rockfish Skills
 
-A collection of [Claude Skills](https://claude.com/skills) for the [Rockfish](https://www.rockfish.ai/) SDK — a Python SDK for generating synthetic data.
+A collection of [Claude Skills](https://claude.com/skills) for the [Rockfish](https://www.rockfish.ai/) SDK — a Python SDK for generating synthetic data. Install them into Claude Code (or another compatible agent) and it will reach for the right one when you ask it to generate synthetic data, inject time-series scenarios, or analyze Snowflake tables.
 
-## Install
+| Skill | What it does |
+| --- | --- |
+| [`generate-from-schema`](skills/generate-from-schema/) | Generate synthetic tabular / time-series data from a schema (columns, state machines, foreign keys, PII-like values). |
+| [`inject-scenarios`](skills/inject-scenarios/) | Inject spikes, outages, ramps, and shifts into a baseline time series for ML robustness and anomaly-detection testing. |
+| [`snowflake-analyst`](skills/snowflake-analyst/) | Explore and load Snowflake data like local CSVs — list, describe, sample, profile, query, and import — without dragging whole tables over the network. |
+
+---
+
+## Install the skills
+
+Pick one method. **Option A (plugin)** is the simplest for Claude Code and upgrades natively; **Option B (symlink)** works for any agent that reads `~/.claude/skills` and upgrades with `git pull`.
+
+Each skill is a self-contained directory under [`skills/`](skills/) — all three methods install from that same source.
+
+### Option A — Claude Code plugin (recommended)
+
+Run these inside an interactive Claude Code session:
+
+```
+/plugin marketplace add Rockfish-Data/rockfish-skills
+/plugin install rockfish-skills@rockfish-skills
+```
+
+The first command registers this repo as a plugin marketplace; the second installs the `rockfish-skills` plugin (which bundles all the skills). Start a new session — or the same one — and the skills are available.
+
+For CI or scripted setup, the non-interactive form is:
+
+```bash
+claude plugin marketplace add Rockfish-Data/rockfish-skills
+claude plugin install rockfish-skills@rockfish-skills --scope user -y
+```
+
+> Exact `claude plugin` flags can vary by Claude Code version — run `claude plugin --help` if a subcommand differs.
+
+### Option B — Symlink into your personal skills directory
+
+Clone the repo, then run the install script. It symlinks each skill into `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills`), so a later `git pull` upgrades every installed skill in place.
+
+```bash
+git clone https://github.com/Rockfish-Data/rockfish-skills.git
+cd rockfish-skills
+scripts/install-skills.sh
+```
+
+Useful flags:
+
+```bash
+scripts/install-skills.sh --list            # show what would be installed
+scripts/install-skills.sh --project DIR     # install into DIR/.claude/skills instead of your home dir
+scripts/install-skills.sh --copy            # copy instead of symlink (no auto-upgrade)
+scripts/install-skills.sh --uninstall       # remove the skills this repo installed
+```
+
+Restart your agent (or start a new session) to pick up the change.
+
+### Option C — Project skills (commit into a repo)
+
+To make the skills available to everyone working in a specific repository — including cloud sessions (claude.ai / Cowork / routines), which can't see your local `~/.claude/skills` — install them into that repo's `.claude/skills/` and commit them:
+
+```bash
+# from inside the target repo, with this repo cloned alongside it
+../rockfish-skills/scripts/install-skills.sh --project . --copy
+git add .claude/skills && git commit -m "Add Rockfish skills"
+```
+
+Use `--copy` (not a symlink) here so the skills travel with the repo.
+
+### Claude Desktop and claude.ai
+
+The same `SKILL.md` skills work in the Claude Desktop app and on claude.ai/code, but the install path differs by surface:
+
+- **Project skills** committed to a repo's `.claude/skills/` (Option C) are picked up automatically when that repo is opened in the Desktop Code tab, the web Code sandbox, or a cloud session.
+- **Personal skills** must be enabled for your claude.ai account (via **Customize / Skills** in the sidebar) to appear in Desktop and cloud sessions. A local `~/.claude/skills` symlink (Option B) only affects the Claude Code CLI on that machine.
+
+---
+
+## Upgrading
+
+| Installed via | Upgrade command |
+| --- | --- |
+| Option A — plugin | `/plugin marketplace update rockfish-skills` (in a session), or `claude plugin marketplace update rockfish-skills` |
+| Option B — symlink | `git pull` in your clone — symlinks point at the repo, so skills update in place |
+| Option B — `--copy` / Option C | `git pull`, then re-run `scripts/install-skills.sh` (with the same flags) to refresh the copies |
+
+---
+
+## Run the examples (Rockfish SDK)
+
+The [`examples/`](examples/) scripts are runnable, self-contained walkthroughs of the SDK features the skills describe. To run them you need the SDK installed and a Rockfish config.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-That pulls in `rockfish[labs]` from `https://packages.rockfish.ai`, plus any dependencies the example scripts need (e.g. `matplotlib`).
-
-The SDK alone:
+That pulls in `rockfish[labs]` from `https://packages.rockfish.ai`, plus what the example scripts need (e.g. `matplotlib`). To install just the SDK:
 
 ```bash
 pip install -U 'rockfish[labs]' -f 'https://packages.rockfish.ai'
 ```
 
-You'll also need a Rockfish config at `~/.config/rockfish/config.toml` (or the `ROCKFISH_*` env vars) so the examples can talk to the backend.
-
-## Quickstart
+You'll also need a Rockfish config at `~/.config/rockfish/config.toml` (or the `ROCKFISH_*` env vars) so the examples can talk to the backend. Then:
 
 ```bash
 python examples/entity-gen.py --help    # generate synthetic data from a schema
 python examples/scenarios.py --help     # inject scenarios into a time-series dataset
 ```
 
-## What's here
+Example scripts write artifacts (plots, datasets) to `output/` (gitignored).
 
-- **`examples/`** — runnable Python scripts demonstrating Rockfish SDK features end-to-end. Each is a self-contained walkthrough.
-- **`skills/`** — [Claude Skills](https://claude.com/skills) for working with the Rockfish SDK. Each skill is a directory containing a `SKILL.md` that an agent (Claude Code, Claude Desktop, etc.) loads to understand when and how to use the underlying SDK feature. Skills point at the corresponding example scripts as worked references.
-- **`output/`** — gitignored; example scripts write artifacts (plots, datasets) here.
+---
 
 ## How skills work
 
-A skill is a directory under `skills/` containing a `SKILL.md` file with:
+A skill is a directory under [`skills/`](skills/) containing a `SKILL.md` file with:
 
 - YAML frontmatter (`name`, `description`) — the `description` is the matching signal an agent uses to decide whether to load the skill.
 - A markdown body explaining when to use the skill and how to invoke the underlying SDK feature.
-- (Optional) Additional reference files, scripts, or templates loaded on demand.
+- (Optional) companion reference files or scripts, loaded on demand — e.g. `snowflake-analyst` ships a `scripts/` helper.
 
-When a compatible agent has these skills installed, it surfaces the most relevant one based on the user's request. The `SKILL.md` is loaded first; companion files are pulled in only when needed.
-
-See the skills in [`skills/`](skills/) for working examples. CONTRIBUTING.md describes how to add a new one.
+When a compatible agent has these skills installed, it surfaces the most relevant one based on your request. The `SKILL.md` is loaded first; companion files are pulled in only when needed. The skills point at the matching [`examples/`](examples/) scripts as worked references.
 
 ## Contributing
 
@@ -54,5 +134,6 @@ Apache 2.0 — see [LICENSE](LICENSE).
 ## References
 
 - [Rockfish SDK package index](https://packages.rockfish.ai) — `pip` find-links source for `rockfish[labs]`.
+- [Claude Skills](https://claude.com/skills) — what skills are and how agents use them.
 - [The Complete Guide to Building Skills for Claude](https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf) — Anthropic's official PDF guide.
 - [Lessons from building Claude Code: how we use skills](https://claude.com/blog/lessons-from-building-claude-code-how-we-use-skills) — Anthropic engineering blog on real-world skill design.
