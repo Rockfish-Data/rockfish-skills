@@ -55,20 +55,14 @@ async with rf.Connection.from_config() as conn:
 
 `from_config()` reads `~/.config/rockfish/config.toml` or `ROCKFISH_*` env vars. The `async with` ensures the underlying HTTP session is closed cleanly.
 
-## Worked example
+## Reference implementation
 
-See [`examples/entity-gen.py`](../../examples/entity-gen.py) for a runnable script with four cases:
+See [`reference/entity-gen.py`](reference/entity-gen.py) for four worked cases:
 
 1. Simple device schema (JSON dict) — independent + derived columns.
 2. User sessions (typed dataclasses) — state machine + timeseries + foreign key.
 3. Trades (typed dataclasses) — composite foreign key.
 4. Customers (typed dataclasses) — `NamedEntityProvider` for realistic PII-like values, with a multilingual variant.
-
-Run one example at a time:
-
-```bash
-python examples/entity-gen.py -e 2
-```
 
 ## Gotchas
 

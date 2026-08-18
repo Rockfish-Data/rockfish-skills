@@ -70,14 +70,9 @@ async for sd in client.list_for_source(source_id):
 
 `Client` derives the scenarios service URL from the connection's API host by replacing `api` with `manta` (e.g. `api.rockfish.ai` → `manta.rockfish.ai`). Pass `scenarios_url=...` explicitly if your deployment doesn't follow that convention.
 
-## Worked example
+## Reference implementation
 
-See [`examples/scenarios.py`](../../examples/scenarios.py) — an end-to-end walkthrough that creates a baseline series, injects spike and outage scenarios, reads the scenario config back, and lists every derived dataset. Plots are written to `output/scenarios/`.
-
-```bash
-python examples/scenarios.py --help
-python examples/scenarios.py
-```
+See [`reference/scenarios.py`](reference/scenarios.py) — an end-to-end walkthrough that creates a baseline series, injects spike and outage scenarios, reads the scenario config back, and lists every derived dataset.
 
 ## Gotchas
 
