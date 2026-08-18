@@ -4,15 +4,17 @@ Thanks for your interest in contributing.
 
 ## Setting up
 
+This repo uses [uv](https://docs.astral.sh/uv/) to manage the environment. [Install it](https://docs.astral.sh/uv/getting-started/installation/), then:
+
 ```bash
 git clone https://github.com/Rockfish-Data/rockfish-skills.git
 cd rockfish-skills
-python -m venv .venv
+uv venv
 source .venv/bin/activate
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
-You'll need a Rockfish account and a config file at `~/.config/rockfish/config.toml` to run examples that talk to the backend.
+`uv pip install` reads the `--find-links` line in `requirements.txt`, so `rockfish[labs]` resolves from the Rockfish package index automatically. You'll need a Rockfish account and a config file at `~/.config/rockfish/config.toml` to run examples that talk to the backend.
 
 ## Adding a new example
 
@@ -35,7 +37,7 @@ A `SKILL.md` needs:
 
 Keep `SKILL.md` short. Push detail into companion files or the linked example script.
 
-A new `skills/<skill-name>/` directory is picked up automatically by every install method in the [README](README.md#install-the-skills) — the plugin bundles everything under `skills/`, and the manual symlink/copy steps loop over whatever directories are there. No manifest to edit. Bump the `version` in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) and [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) when you ship a change so plugin users get the update prompt.
+A new `skills/<skill-name>/` directory is picked up automatically by both install methods in the [README](README.md#install-the-skills) — the plugin bundles everything under `skills/`, and a manual install just points at the same directories. No manifest to edit. The plugin version lives in one place, [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json); bump it when you ship a change so plugin users get the update prompt.
 
 After adding or editing a skill, symlink it into `~/.claude/skills/` (see the README) and start a fresh session to sanity-check that the agent surfaces it.
 

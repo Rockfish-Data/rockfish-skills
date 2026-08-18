@@ -12,9 +12,9 @@ A collection of [Claude Skills](https://claude.com/skills) for the [Rockfish](ht
 
 ## Install the skills
 
-Pick one method. **Option A (plugin)** is the simplest for Claude Code and upgrades natively; **Option B (symlink)** works for any agent that reads `~/.claude/skills` and upgrades with `git pull`.
+Pick one method. **Option A (plugin)** is the simplest for Claude Code and upgrades natively; **Option B (manual)** installs the skill directories yourself, following the official skills docs.
 
-Each skill is a self-contained directory under [`skills/`](skills/) — all three methods install from that same source.
+Each skill is a self-contained directory under [`skills/`](skills/) — both methods install from that same source.
 
 ### Option A — Claude Code plugin (recommended)
 
@@ -36,73 +36,46 @@ claude plugin install rockfish-skills@rockfish-skills --scope user -y
 
 > Exact `claude plugin` flags can vary by Claude Code version — run `claude plugin --help` if a subcommand differs.
 
-### Option B — Symlink into your personal skills directory
+### Option B — Install manually
 
-Clone the repo, then symlink each skill into `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills`). Symlinks mean a later `git pull` upgrades every installed skill in place — nothing to re-run.
+Skills are just directories, so you can install them yourself without the plugin. Clone this repo:
 
 ```bash
 git clone https://github.com/Rockfish-Data/rockfish-skills.git
-cd rockfish-skills
-mkdir -p ~/.claude/skills
-for skill in skills/*/; do
-  ln -s "$PWD/$skill" ~/.claude/skills/"$(basename "$skill")"
-done
 ```
 
-`ln -s` refuses to overwrite an existing `~/.claude/skills/<name>`, so it won't clobber a skill you already have — remove or rename the conflict first if you hit one. Restart your agent (or start a new session) to pick up the change.
+Then make each directory under [`skills/`](skills/) visible to your agent — as a **personal** skill (available everywhere) or a **project** skill (scoped to one repo, and the only kind cloud sessions can see). The exact install locations, how skills are discovered, and how to remove one vary by environment and version, so follow the official guide rather than paths hardcoded here:
 
-To remove them, delete the symlinks (this only removes the links, never your clone):
+- **[Claude Code — Extend Claude with skills](https://code.claude.com/docs/en/skills)** — install locations and management for the CLI.
+- **[Agent Skills overview](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview)** — how skills work across Claude Code, the Desktop app, and claude.ai (where personal skills are enabled per account).
 
-```bash
-rm ~/.claude/skills/generate-from-schema \
-   ~/.claude/skills/inject-scenarios \
-   ~/.claude/skills/snowflake-analyst
-```
-
-### Option C — Project skills (commit into a repo)
-
-To make the skills available to everyone working in a specific repository — including cloud sessions (claude.ai / Cowork / routines), which can't see your local `~/.claude/skills` — copy them into that repo's `.claude/skills/` and commit them:
-
-```bash
-# from inside the target repo, with rockfish-skills cloned alongside it
-mkdir -p .claude/skills
-cp -R ../rockfish-skills/skills/* .claude/skills/
-git add .claude/skills && git commit -m "Add Rockfish skills"
-```
-
-Copy (don't symlink) here so the skills travel with the repo. Note: the `generate-from-schema` and `inject-scenarios` skills link to `../../examples/...` as worked references; from a committed copy those resolve to `.claude/examples/`, so copy [`examples/`](examples/) there too if you want those references to open. To upgrade later, `git pull` in the clone and re-run the `cp -R` above.
-
-### Claude Desktop and claude.ai
-
-The same `SKILL.md` skills work in the Claude Desktop app and on claude.ai/code, but the install path differs by surface:
-
-- **Project skills** committed to a repo's `.claude/skills/` (Option C) are picked up automatically when that repo is opened in the Desktop Code tab, the web Code sandbox, or a cloud session.
-- **Personal skills** must be enabled for your claude.ai account (via **Customize / Skills** in the sidebar) to appear in Desktop and cloud sessions. A local `~/.claude/skills` symlink (Option B) only affects the Claude Code CLI on that machine.
+If you symlink the directories from your clone, a later `git pull` upgrades the installed skills in place; if you copy them, re-copy to upgrade.
 
 ---
 
 ## Upgrading
 
-| Installed via | Upgrade command |
+| Installed via | Upgrade |
 | --- | --- |
 | Option A — plugin | `/plugin marketplace update rockfish-skills` (in a session), or `claude plugin marketplace update rockfish-skills` |
-| Option B — symlink | `git pull` in your clone — symlinks point at the repo, so skills update in place |
-| Option C — copied into a repo | `git pull` in the clone, then re-run the `cp -R` to refresh the copies |
+| Option B — manual | `git pull` in your clone — symlinked skills update in place; re-copy if you copied them |
 
 ---
 
 ## Run the examples (Rockfish SDK)
 
-The [`examples/`](examples/) scripts are runnable, self-contained walkthroughs of the SDK features the skills describe. To run them you need the SDK installed and a Rockfish config.
+The [`examples/`](examples/) scripts are runnable, self-contained walkthroughs of the SDK features the skills describe. To run them you need the SDK installed and a Rockfish config. Using [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pip install -r requirements.txt
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
 ```
 
 That pulls in `rockfish[labs]` from `https://packages.rockfish.ai`, plus what the example scripts need (e.g. `matplotlib`). To install just the SDK:
 
 ```bash
-pip install -U 'rockfish[labs]' -f 'https://packages.rockfish.ai'
+uv pip install -U 'rockfish[labs]' -f 'https://packages.rockfish.ai'
 ```
 
 You'll also need a Rockfish config at `~/.config/rockfish/config.toml` (or the `ROCKFISH_*` env vars) so the examples can talk to the backend. Then:

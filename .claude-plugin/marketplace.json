@@ -5,15 +5,13 @@
     "url": "https://github.com/Rockfish-Data/rockfish-skills"
   },
   "metadata": {
-    "description": "Claude Skills for the Rockfish synthetic-data SDK.",
-    "version": "0.1.0"
+    "description": "Claude Skills for the Rockfish synthetic-data SDK."
   },
   "plugins": [
     {
       "name": "rockfish-skills",
       "source": "./",
-      "description": "Schema-based synthetic data generation, time-series scenario injection, and Snowflake analysis skills for the Rockfish SDK.",
-      "version": "0.1.0"
+      "description": "Schema-based synthetic data generation, time-series scenario injection, and Snowflake analysis skills for the Rockfish SDK."
     }
   ]
 }
