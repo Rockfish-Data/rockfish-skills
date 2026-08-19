@@ -1,0 +1,11 @@
+{
+  "name": "rockfish-skills",
+  "description": "Claude Skills for the Rockfish synthetic-data SDK: schema-based generation, scenario injection, and Snowflake analysis.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Rockfish Data",
+    "url": "https://www.rockfish.ai/"
+  },
+  "homepage": "https://github.com/Rockfish-Data/rockfish-skills",
+  "license": "Apache-2.0"
+}
