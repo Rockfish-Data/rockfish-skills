@@ -406,6 +406,10 @@ async def example_3_timeseries(conn: rf.Connection) -> None:
     Note `interval_minutes` on the TimeseriesParams must be kept in step with
     `global_timestamp.time_interval` by hand -- they are configured separately
     and a mismatch quietly distorts the seasonal shape.
+
+    The generated timestamp column comes back as an ISO 8601 string rather than
+    an Arrow timestamp, so parse it with `pd.to_datetime(..., utc=True)` before
+    using any `.dt` accessor.
     """
     cardinality, interval_minutes, window_hours = 8, 15, 12
     schema = DataSchema(
@@ -506,17 +510,29 @@ async def example_3_timeseries(conn: rf.Connection) -> None:
         bool(devices["cpu_pct"].between(10.0, 95.0).all()),
         f"range {devices['cpu_pct'].min():.1f}-{devices['cpu_pct'].max():.1f}",
     )
+    # The timestamp column arrives as an ISO 8601 *string*, not an Arrow
+    # timestamp -- Timestamp(data_type=...) does not change that. So .dt is
+    # unavailable until you parse it, which any time-series analysis needs to do
+    # first. The values are UTC with an explicit +00:00 offset.
+    import pandas as pd
+
+    ts = pd.to_datetime(devices["timestamp"], utc=True, errors="coerce")
     check(
-        "timestamps are timezone-aware UTC",
-        str(devices["timestamp"].dt.tz) in ("UTC", "+00:00"),
-        f"tz={devices['timestamp'].dt.tz}",
+        "every timestamp parses as ISO 8601",
+        bool(ts.notna().all()),
+        f"{int(ts.isna().sum())} unparseable of {len(ts)}",
+    )
+    check(
+        "timestamps are UTC once parsed",
+        str(ts.dt.tz) == "UTC",
+        f"raw={devices['timestamp'].iloc[0]!r} -> tz={ts.dt.tz}",
     )
 
     # peak_offpeak seasonality should lift the mean inside the peak window.
     # Distributional rather than exact, so the bar is deliberately just
     # "strictly higher" -- with ~200 samples per regime and a 0.4 strength
     # step, the two means separate comfortably.
-    hours = devices["timestamp"].dt.hour
+    hours = ts.dt.hour
     peak = devices[hours >= 8]["cpu_pct"]
     offpeak = devices[hours < 8]["cpu_pct"]
     check(

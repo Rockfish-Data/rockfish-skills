@@ -117,7 +117,7 @@ Use `decimal128(18, 2)` (not `float64`) for monetary amounts so values stay exac
 | Field | Type | Description |
 | --- | --- | --- |
 | `column_name` | `str` | e.g. `"timestamp"`, `"event_time"`. |
-| `data_type` | `str` `= "timestamp"` | |
+| `data_type` | `str` `= "timestamp"` | Declared only; the emitted column is Arrow `string` regardless (verified against 0.79.0 for both `"timestamp"` and `"timestamp[us]"`). |
 
 ### `GlobalTimestamp`
 
@@ -133,7 +133,15 @@ Use `decimal128(18, 2)` (not `float64`) for monetary amounts so values stay exac
 - Entities whose only stateful columns are **timeseries** expand densely: one row per instance per tick.
 - Entities with a **state machine** place each session at a random start tick and occupy consecutive ticks from there until a terminal state; other measurements are sampled at those ticks.
 
-**Timezone contract.** `t_start`/`t_end` accept a `Z` suffix, an explicit offset, or no timezone (naive is read as UTC). Every generated timestamp is emitted as timezone-aware UTC in ISO 8601 with `+00:00` (server ≥ 0.77.0; older servers mirror the style of `t_start`).
+**Timezone contract.** `t_start`/`t_end` accept a `Z` suffix, an explicit offset, or no timezone (naive is read as UTC). Every generated timestamp is emitted as UTC in ISO 8601 with `+00:00` (server ≥ 0.77.0; older servers mirror the style of `t_start`).
+
+**Output type.** The timestamp column is an Arrow **`string`**, not a timestamp type — so in pandas it is `str` and the `.dt` accessor raises `AttributeError` until you convert:
+
+```python
+ts = pd.to_datetime(df["timestamp"], utc=True)   # -> datetime64[us, UTC]
+```
+
+Do this before any resampling, `.dt.hour` grouping, or time-based join.
 
 ---
 

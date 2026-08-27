@@ -161,6 +161,6 @@ Read these when you need detail beyond the tables above:
 - **Set `seed` for anything reproducible.** Without it the server draws a fresh seed, logs it, and stamps it on each uploaded dataset as an `ent_seed` label — so a run can be reproduced after the fact.
 - **`scale_factor` grows fact entities only.** Set `Entity.scale_with_factor=False` on reference/dimension entities so catalogs stay fixed as the run scales.
 - **Use `decimal128(18, 2)` for money**, not `float64`, so amounts stay exact to the cent.
-- **All timestamps come back as timezone-aware UTC**, whatever style `t_start`/`t_end` were written in.
+- **Timestamps come back as ISO 8601 *strings*, not Arrow timestamps.** Values are UTC with an explicit `+00:00` offset (`'2025-01-01T00:00:00+00:00'`) whatever style `t_start`/`t_end` were written in — but the column's Arrow type is `string`, and `Timestamp(data_type=...)` does not change that. Parse before any `.dt` use: `pd.to_datetime(df["timestamp"], utc=True)`.
 - **`NamedEntityProvider` uniqueness is best-effort**: pass `unique_values=N, with_replacement=False`, and note that replacement is force-enabled if rows exceed the pool.
 - **This skill targets rockfish 0.79.0.** On an older SDK the newer names (`scale_factor`, the advanced `EntityRelationship` fields, `ROUND`, `SUBSTRING`, `LUHN_APPEND`, `SHIFT_TIMESTAMP`, `SAMPLE_FROM_COLUMN_WHERE`) fail at *import*, not at generation. See [Requirements](reference/schema-reference.md#requirements).
