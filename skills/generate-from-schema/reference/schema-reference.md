@@ -56,7 +56,9 @@ Root of the schema.
 - Relationship `parent_entity`/`child_entity` must exist; `join_columns` must reference existing columns on both sides.
 - `FOREIGN_KEY` columns may only appear in a `child_entity`, unless that entity is itself a child in another relationship (parent → child → grandchild chains are allowed).
 - `ONE_TO_ONE` requires `child.cardinality <= parent.cardinality`.
-- Every `FOREIGN_KEY` column must be declared in some relationship's `join_columns`.
+- Every `FOREIGN_KEY` column must be declared in some relationship where its entity is the child, in either `join_columns` **or** `inherit_columns` (the validator unions both). A `FOREIGN_KEY` column is therefore not necessarily part of the key — an inherited receiver is a plain denormalized attribute.
+- `join_columns` and `inherit_columns` are **mutually exclusive** on the child side: a child column named in both is rejected (`... are already join columns`). A column is either part of the key or a copied attribute, never both.
+- Each foreign-key/inherited child column must be filled by exactly **one** relationship. Two relationships claiming the same child column is rejected.
 - A child may be count-driven by at most one relationship; `GROUP_ORDINAL` columns are only valid on a count-driven child.
 
 ---
@@ -152,7 +154,7 @@ Use `decimal128(18, 2)` (not `float64`) for monetary amounts so values stay exac
 | `join_columns` | `dict[str, str]` `= {}` | `{parent_column: child_fk_column}`. Cannot be empty. Multiple pairs = composite key. |
 | `child_count_column` | `str \| None` `= None` | Integer column on the parent; a parent row with value `k` emits exactly `k` child rows. Child `cardinality` is ignored. `ONE_TO_MANY` only. |
 | `inherit_columns` | `dict[str, str]` `= {}` | `{parent_column: child_column}` — child copies the value from the **same** parent row it joined to. The receiving child column must be `FOREIGN_KEY`. |
-| `self_reference` | `bool` `= False` | Entity references itself. `parent_entity == child_entity`, one `join_columns` pair, each row points at a strictly-earlier row (null for roots) — acyclic by construction. |
+| `self_reference` | `bool` `= False` | Entity references itself. `parent_entity == child_entity`, one `join_columns` pair, each row points at a strictly-earlier row (null for roots) — acyclic by construction. Cannot be combined with `child_count_column` or `inherit_columns`. |
 | `partition_by` | `str \| None` `= None` | With `self_reference`, confine references to earlier rows sharing this metadata column's value. |
 | `root_fraction` | `float` `= 0.0` | With `self_reference`, fraction of non-forced rows left as roots (null reference), in addition to the first row of each partition. |
 | `weight_column` | `str \| None` `= None` | Numeric parent column; children are assigned in proportion to it rather than uniformly (Pareto-like "whales"). Sampled FK on `ONE_TO_MANY` only — not with `child_count_column`. |

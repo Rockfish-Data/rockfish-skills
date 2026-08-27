@@ -82,8 +82,16 @@ tabular, since there are no distinct sessions to learn from.
 - **Tabular entity**: no `Timestamp`, all columns `METADATA`, `column_type` ∈
   `INDEPENDENT` / `DERIVED` / `FOREIGN_KEY`. Rows = `cardinality`.
 - **Time-series entity**: `Timestamp` required, at least one `MEASUREMENT` column, which
-  must be `STATEFUL` (`TIMESERIES` / `STATE_MACHINE`) or `DERIVED`. Rows ≈
-  `cardinality × ticks`.
+  must be `STATEFUL` (`TIMESERIES` / `STATE_MACHINE`) or `DERIVED`. Row count depends on
+  *which* stateful domain you used — a `Timestamp` puts the entity on the time grid, it does
+  not mean every tick is filled:
+    - **`TIMESERIES` only → dense.** One row per instance per tick, so
+      rows = `cardinality × ticks`. A metric like CPU usage has a value at every moment.
+    - **`STATE_MACHINE` → sparse.** Each session starts at a random tick and occupies
+      consecutive ticks only until it reaches a terminal state, so
+      rows ≈ `cardinality × mean walk length` — independent of how wide the window is.
+      A 4-step session is 4 rows whether the window holds 5 ticks or 500. Applying
+      `cardinality × ticks` here can overestimate by one or two orders of magnitude.
 - **Metadata is generated once per instance**, before timestamp expansion, which is why a
   metadata column can never depend on a measurement column. The reverse is allowed: each
   metadata value is present on every row of its session.

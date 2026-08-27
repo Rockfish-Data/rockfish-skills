@@ -17,8 +17,9 @@ All snippets assume the usual imports from `rockfish.actions.ent`.
 
 **Tabular entity** — rows = `cardinality`.
 
-**Time-series entity** — rows ≈ `cardinality × ticks`, where ticks is the number of
-`time_interval` steps in `[t_start, t_end]`, inclusive of both ends.
+**Time-series entity with `TIMESERIES` columns (dense)** — rows = `cardinality × ticks`,
+where ticks is the number of `time_interval` steps in `[t_start, t_end]`, inclusive of both
+ends. Every instance gets a row at every tick.
 
 Two days at `15min` is `2 × 96 + 1 = 193` ticks:
 
@@ -28,8 +29,11 @@ Two days at `15min` is `2 × 96 + 1 = 193` ticks:
 | `core_node` | 16 | 16 × 193 = 3,088 |
 | `cell_site` | 100 | 100 × 193 = 19,300 |
 
-State-machine entities are sparser: each session starts at a random tick and runs until a
-terminal state, so it occupies only as many ticks as its walk is long.
+**Time-series entity with a `STATE_MACHINE` (sparse)** — the formula above does not apply.
+Each session starts at a random tick and occupies consecutive ticks only until it reaches a
+terminal state, so rows ≈ `cardinality × mean walk length`, independent of the window width.
+Widening the window spreads the sessions out; it does not add rows. Over the 193-tick window
+above, sessions averaging ~4 steps yield ~400 rows at `cardinality=100`, not 19,300.
 
 **Choosing cardinalities.** Match real-world scale, but iterate small — 5–20 instances while
 you are still shaping the schema, 100–1000+ for the final run. Think in ratios: 100 cells to
@@ -191,7 +195,7 @@ EntityRelationship(
 )
 ```
 
-The receiving child columns must be declared `column_type=FOREIGN_KEY`.
+The receiving child columns must be declared `column_type=FOREIGN_KEY` — that marker means "a relationship fills this in," not "this is a key." Leave them out of `join_columns`: adding them there would make them part of the relationship's key instead of a copied attribute.
 
 ---
 

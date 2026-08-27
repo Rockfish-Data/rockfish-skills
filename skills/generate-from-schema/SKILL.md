@@ -140,7 +140,7 @@ asyncio.run(main())
 - **Category constrains type.** Independent and foreign-key columns must be `METADATA`; stateful columns must be `MEASUREMENT`; derived columns may be either.
 - **Metadata cannot depend on measurement.** Metadata is generated once per entity instance, before timestamp expansion. The reverse (measurement depending on metadata) is fine.
 - **Only `SAMPLE_FROM_COLUMN` crosses entities** in `dependent_columns`. Everything else must reference same-entity columns.
-- **Foreign keys carry no domain or derivation**, and every `FOREIGN_KEY` column must appear as a value in some relationship's `join_columns` where its entity is the child.
+- **`FOREIGN_KEY` marks provenance, not a key.** It means the column carries no domain or derivation because a relationship supplies its values. Every such column must be named by some relationship where its entity is the child — either in `join_columns` (it is part of the key) or in `inherit_columns` (it is a denormalized copy from the joined parent row). Being `FOREIGN_KEY` does not make a column part of the key, so never move an inherited column into `join_columns` to satisfy this rule.
 - **State machines create implicit columns.** `trigger_column_name` and every `context_variables` key become real columns; their names must not collide with any other column (including the timestamp).
 - **`CategoricalParams.weights` must sum to 1.0** (unlike transition and mixture weights, which are normalized for you).
 
@@ -155,9 +155,9 @@ Read these when you need detail beyond the tables above:
 
 ## Gotchas
 
-- **Cardinality is instances, not rows.** For a timestamped entity, rows ≈ `cardinality × ticks`, where ticks span `[t_start, t_end]` at `time_interval` (inclusive of both ends). 100 cells over 2 days at `15min` = 100 × 193 = 19,300 rows. A count-driven child ignores `cardinality` entirely.
+- **Cardinality is instances, not rows.** For a **timeseries** entity, rows = `cardinality × ticks`, where ticks span `[t_start, t_end]` at `time_interval` (inclusive of both ends). 100 cells over 2 days at `15min` = 100 × 193 = 19,300 rows. This formula does **not** hold for state-machine entities (next bullet), and a count-driven child ignores `cardinality` entirely.
 - **`TimeseriesParams.interval_minutes` should match `global_timestamp.time_interval`** — they are configured separately and a mismatch distorts the seasonal shape.
-- **Timeseries entities expand densely; state-machine entities do not.** A timeseries-only entity emits one row per instance per tick. A state-machine entity places each session at a random start tick and walks consecutive ticks until a terminal state.
+- **Timeseries entities expand densely; state-machine entities do not.** A timeseries-only entity emits one row per instance per tick. A state-machine entity places each session at a random start tick and walks consecutive ticks until a terminal state, so its rows ≈ `cardinality × mean walk length` — independent of window width. Sizing one with `cardinality × ticks` can overestimate by one or two orders of magnitude.
 - **Set `seed` for anything reproducible.** Without it the server draws a fresh seed, logs it, and stamps it on each uploaded dataset as an `ent_seed` label — so a run can be reproduced after the fact.
 - **`scale_factor` grows fact entities only.** Set `Entity.scale_with_factor=False` on reference/dimension entities so catalogs stay fixed as the run scales.
 - **Use `decimal128(18, 2)` for money**, not `float64`, so amounts stay exact to the cent.
