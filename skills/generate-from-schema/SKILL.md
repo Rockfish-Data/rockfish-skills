@@ -1,72 +1,166 @@
 ---
 name: generate-from-schema
-description: Generate synthetic datasets from a schema specification using the Rockfish SDK. Use when a user wants to create synthetic tabular or time-series data with specific structure — independent or derived columns, state machines, timeseries, entity relationships (including composite foreign keys), or realistic PII-like values (names, emails, addresses, SSNs) via NamedEntityProvider. Trigger on phrases like "generate synthetic data", "fake data from a schema", "create a test dataset", "GenerateFromDataSchema", or mentions of entity/foreign-key/state-machine data.
+description: Generate synthetic datasets from a schema specification using the Rockfish SDK. Use when a user wants to create synthetic tabular or time-series data with specific structure — independent, stateful, or derived columns, state machines, timeseries with seasonality, entity relationships (foreign keys, composite keys, parent/child fan-out, self-references), or realistic PII-like values (names, emails, addresses, SSNs) via NamedEntityProvider. Trigger on phrases like "generate synthetic data", "fake data from a schema", "create a test dataset", "GenerateFromDataSchema", or mentions of entity/foreign-key/state-machine data.
 ---
 
 # Generate from schema
 
-Use `rockfish.actions.GenerateFromDataSchema` to produce synthetic datasets from a schema specification.
+Use `rockfish.actions.GenerateFromDataSchema` to produce synthetic datasets from a declarative schema. One `DataSchema` yields one dataset (PyArrow table) per `Entity`, with referential integrity, temporal patterns, and reproducible output.
 
 ## When to use this skill
 
-Use when the user wants to generate synthetic tabular or time-series data with:
+Use when the user wants synthetic tabular or time-series data with:
 
-- Specific column types (IDs, categoricals, numeric distributions).
-- Derived columns (computed from other columns — e.g. mapping or sampling).
-- Stateful behavior (state machines or timeseries).
-- Cross-entity relationships (foreign keys, including composite keys).
-- Realistic PII-like values (names, emails, addresses, SSNs).
+- Specific column shapes — IDs, globally-unique keys, categoricals, statistical distributions, mixtures.
+- Time-varying measurements (timeseries with seasonality/noise/spikes) or behavioral sequences (state machines).
+- Computed columns — arithmetic, value mapping, running totals, cross-entity roll-ups, string templates.
+- Cross-entity relationships — foreign keys, composite keys, count-driven fan-out, whales, hierarchies.
+- Realistic PII-like values (names, emails, addresses, SSNs, cards) that carry no real customer data.
 
 If the user wants to inject *scenarios* (spikes, outages, ramps, shifts) into an existing time-series dataset, use the `inject-scenarios` skill instead.
 
 ## Concept
 
-`rockfish.actions.GenerateFromDataSchema` takes a `DataSchema` and produces one synthetic dataset per `Entity`. A schema is a tree:
+A schema is a tree. Every generated column is one of four **column types**, and each column is also either **metadata** (constant per entity instance) or **measurement** (varies per timestamp):
 
 ```
-DataSchema
-├── entities: list[Entity]
-│   ├── name, cardinality
-│   ├── columns: list[Column]
-│   │   ├── name, data_type
-│   │   ├── column_type  (independent | derived | stateful | foreign_key)
-│   │   └── domain       (id | categorical | uniform_dist | state_machine
-│   │                     | timeseries | named_entity_provider | ...)
-│   └── (optional) timestamp
+DataSchema(seed, scale_factor)
+├── entities: list[Entity]            # name, cardinality, scale_with_factor
+│   ├── columns: list[Column]         # name, data_type, column_type, column_category_type
+│   │   ├── column_type = independent → domain=Domain(...)      # metadata only
+│   │   ├── column_type = stateful    → domain=TIMESERIES|STATE_MACHINE  # measurement only
+│   │   ├── column_type = derived     → derivation=Derivation(...)
+│   │   └── column_type = foreign_key → no domain, no derivation  # metadata only
+│   └── timestamp: Timestamp          # required iff the entity has measurement columns
 ├── entity_relationships: list[EntityRelationship]
-└── (optional) global_timestamp
+└── global_timestamp: GlobalTimestamp  # required iff any entity has a timestamp
 ```
+
+Generation order is automatic: independent → foreign keys → stateful → derived (in dependency order).
 
 ## How to use
 
-1. Construct a `DataSchema` matching the user's data requirements. Two equivalent forms:
-   - **JSON dict** — convenient for simple cases, language-agnostic.
-   - **Typed dataclasses** (`DataSchema`, `Entity`, `Column`, `Domain`, ...) — validated at construction, better for complex schemas.
-2. Wrap it in `ra.GenerateFromDataSchema.Config(schema=..., upload_datasets=True)`.
-3. Run via `WorkflowBuilder().add(generate).start(conn)`.
-4. Pull results back with `workflow.datasets()`.
-
-## Connection
+1. Decide the data model first — **tabular** (all metadata, no timestamp) or **time-series** (metadata + measurement + timestamp). See [`reference/data-models.md`](reference/data-models.md).
+2. Build the `DataSchema` from typed dataclasses (validated at construction — prefer these) or an equivalent JSON dict.
+3. Wrap it in `ra.GenerateFromDataSchema.Config(schema=..., upload_datasets=True)`.
+4. Add it to a `WorkflowBuilder` and start it, then `await workflow.wait(raise_on_failure=True)`. Note `builder.add()` returns `None`, so it cannot be chained.
+5. Pull results back with `workflow.datasets()`.
 
 ```python
-async with rf.Connection.from_config() as conn:
-    ...
+import asyncio
+
+import rockfish as rf
+import rockfish.actions as ra
+from rockfish.actions.ent import DataSchema, Entity, Column, ColumnType, ColumnCategoryType, Domain, DomainType, IDParams
+
+schema = DataSchema(
+    entities=[
+        Entity(
+            name="users",
+            cardinality=50,
+            columns=[
+                Column(
+                    name="user_id",
+                    data_type="string",
+                    column_type=ColumnType.INDEPENDENT,
+                    column_category_type=ColumnCategoryType.METADATA,
+                    domain=Domain(type=DomainType.ID, params=IDParams(template_str="USER_{id}")),
+                ),
+            ],
+        )
+    ],
+    seed=42,  # makes the whole run reproducible
+)
+
+generate = ra.GenerateFromDataSchema(
+    ra.GenerateFromDataSchema.Config(schema=schema, upload_datasets=True)
+)
+
+async def main():
+    async with rf.Connection.from_config() as conn:
+        builder = rf.WorkflowBuilder()
+        builder.add(generate)          # add() returns None -- not chainable
+        workflow = await builder.start(conn)
+        await workflow.wait(raise_on_failure=True)
+        for remote in await workflow.datasets().collect():
+            ds = await remote.to_local(conn)
+            print(ds.name(), ds.table.num_rows)
+
+
+asyncio.run(main())
 ```
 
-`from_config()` reads `~/.config/rockfish/config.toml` or `ROCKFISH_*` env vars. The `async with` ensures the underlying HTTP session is closed cleanly.
+`Connection.from_config()` reads `~/.config/rockfish/config.toml`; `Connection.from_env()` reads `ROCKFISH_API_KEY` / `ROCKFISH_API_URL` / `ROCKFISH_PROJECT_ID` / `ROCKFISH_ORGANIZATION_ID`. The `async with` closes the HTTP session cleanly.
 
-## Reference implementation
+## Picking a domain
 
-See [`reference/entity-gen.py`](reference/entity-gen.py) for four worked cases:
+`domain` says how an independent or stateful column's values are produced.
 
-1. Simple device schema (JSON dict) — independent + derived columns.
-2. User sessions (typed dataclasses) — state machine + timeseries + foreign key.
-3. Trades (typed dataclasses) — composite foreign key.
-4. Customers (typed dataclasses) — `NamedEntityProvider` for realistic PII-like values, with a multilingual variant.
+| Need | Domain |
+| --- | --- |
+| Templated primary key tied to row position | `ID` — `IDParams(template_str="USER_{id}")` |
+| Plain counter | `SEQUENTIAL_INT` |
+| Guaranteed-unique key, MAC address, or IP | `UNIQUE` — `format` is `template`, `mac`, or `ipv4` |
+| Per-parent child index (0, 1, 2 … within each parent) | `GROUP_ORDINAL` — count-driven children only |
+| Small fixed set of choices, optionally weighted | `CATEGORICAL` |
+| Realistic names, emails, addresses, SSNs, cards | `NAMED_ENTITY_PROVIDER` |
+| Bounded numeric range | `UNIFORM_DIST` |
+| Symmetric numeric quantity | `NORMAL_DIST` |
+| Right-skewed quantity spanning orders of magnitude (latency, income, size) | `LOGNORMAL_DIST` |
+| Waiting time between events | `EXPONENTIAL_DIST` |
+| Multimodal column (e.g. point mass at 0 + heavy tail) | `MIXTURE` — blends other domains |
+| Variable-length token sequence rendered as a string | `SEQUENCE` |
+| Time-varying measurement with seasonality/noise/spikes | `TIMESERIES` — stateful only |
+| Behavioral state progression | `STATE_MACHINE` — stateful only |
+
+## Picking a derivation
+
+`derivation` says how a derived column is computed from other columns.
+
+| Need | Derivation |
+| --- | --- |
+| Total or product of numeric columns | `SUM`, `MULTIPLY` |
+| Round to fixed decimals (money to cents) | `ROUND` |
+| Foreign key sampled from another entity's column | `SAMPLE_FROM_COLUMN` (the only derivation allowed to reference `entity.column`) |
+| Correlated FK restricted to rows matching a local value | `SAMPLE_FROM_COLUMN_WHERE` |
+| Distribution that varies by another column's category | `CONDITIONAL_SAMPLE` |
+| Value lookup / recode | `MAP_VALUES` |
+| Row-aligned alias of one column | `COPY` |
+| Running total/peak/floor within a session | `CUMULATIVE` — measurement column on a timestamped entity |
+| Count or sum of a child entity rolled onto the parent | `AGGREGATE_FROM_CHILD` — takes no `dependent_columns` |
+| Timestamp to epoch seconds/ms or a strftime string | `FORMAT_TIMESTAMP` |
+| Timestamp plus a per-row offset column | `SHIFT_TIMESTAMP` |
+| Composed string from several columns | `STRING_TEMPLATE` |
+| Fixed-position substring | `SUBSTRING` |
+| Luhn check digit appended to an identifier | `LUHN_APPEND` |
+
+## Rules that cause most validation failures
+
+- **Timestamp is all-or-nothing.** An entity has a `timestamp` **if and only if** it has at least one measurement column. If any entity has a timestamp, `DataSchema.global_timestamp` is required.
+- **Category constrains type.** Independent and foreign-key columns must be `METADATA`; stateful columns must be `MEASUREMENT`; derived columns may be either.
+- **Metadata cannot depend on measurement.** Metadata is generated once per entity instance, before timestamp expansion. The reverse (measurement depending on metadata) is fine.
+- **Only `SAMPLE_FROM_COLUMN` crosses entities** in `dependent_columns`. Everything else must reference same-entity columns.
+- **`FOREIGN_KEY` marks provenance, not a key.** It means the column carries no domain or derivation because a relationship supplies its values. Every such column must be named by some relationship where its entity is the child — either in `join_columns` (it is part of the key) or in `inherit_columns` (it is a denormalized copy from the joined parent row). Being `FOREIGN_KEY` does not make a column part of the key, so never move an inherited column into `join_columns` to satisfy this rule.
+- **State machines create implicit columns.** `trigger_column_name` and every `context_variables` key become real columns; their names must not collide with any other column (including the timestamp).
+- **`CategoricalParams.weights` must sum to 1.0** (unlike transition and mixture weights, which are normalized for you).
+
+## Reference
+
+Read these when you need detail beyond the tables above:
+
+- [`reference/schema-reference.md`](reference/schema-reference.md) — every class and field with types, defaults, and validation rules.
+- [`reference/data-models.md`](reference/data-models.md) — time-series vs tabular, and how metadata/measurement/timestamp/session key map onto `column_category_type`.
+- [`reference/patterns.md`](reference/patterns.md) — worked recipes (fan-out, whales, affinity, hierarchies, running counters, money, correlated FKs), row-count math, scaling, and a telecom RAN walkthrough.
+- [`reference/entity-gen.py`](reference/entity-gen.py) — runnable end-to-end examples with output validation.
 
 ## Gotchas
 
-- **Cardinality vs. row count**: `Entity.cardinality` is the number of source rows generated for that entity *before* any sampling/expansion via relationships. A `sessions` entity referencing `users` has its own cardinality independent of `users.cardinality`.
-- **State machines need a `trigger_column_name`**: the column named there appears in the output alongside the state column.
-- **Composite foreign keys**: declare each FK column with `column_type=FOREIGN_KEY` and bind them in `EntityRelationship.join_columns` — the parent-side columns aren't repeated in the child entity's `columns` list.
-- **`NamedEntityProvider` uniqueness**: pass `unique_values=N, with_replacement=False` when you need uniqueness in the generated pool (e.g. emails, SSNs).
+- **Cardinality is instances, not rows.** For a **timeseries** entity, rows = `cardinality × ticks`, where ticks span `[t_start, t_end]` at `time_interval` (inclusive of both ends). 100 cells over 2 days at `15min` = 100 × 193 = 19,300 rows. This formula does **not** hold for state-machine entities (next bullet), and a count-driven child ignores `cardinality` entirely.
+- **`TimeseriesParams.interval_minutes` should match `global_timestamp.time_interval`** — they are configured separately and a mismatch distorts the seasonal shape.
+- **Timeseries entities expand densely; state-machine entities do not.** A timeseries-only entity emits one row per instance per tick. A state-machine entity places each session at a random start tick and walks consecutive ticks until a terminal state, so its rows ≈ `cardinality × mean walk length` — independent of window width. Sizing one with `cardinality × ticks` can overestimate by one or two orders of magnitude.
+- **Set `seed` for anything reproducible.** Without it the server draws a fresh seed, logs it, and stamps it on each uploaded dataset as an `ent_seed` label — so a run can be reproduced after the fact.
+- **`scale_factor` grows fact entities only.** Set `Entity.scale_with_factor=False` on reference/dimension entities so catalogs stay fixed as the run scales.
+- **Use `decimal128(18, 2)` for money**, not `float64`, so amounts stay exact to the cent.
+- **Timestamps come back as ISO 8601 *strings*, not Arrow timestamps.** Values are UTC with an explicit `+00:00` offset (`'2025-01-01T00:00:00+00:00'`) whatever style `t_start`/`t_end` were written in — but the column's Arrow type is `string`, and `Timestamp(data_type=...)` does not change that. Parse before any `.dt` use: `pd.to_datetime(df["timestamp"], utc=True)`.
+- **`NamedEntityProvider` uniqueness is best-effort**: pass `unique_values=N, with_replacement=False`, and note that replacement is force-enabled if rows exceed the pool.
+- **This skill targets rockfish 0.79.0.** On an older SDK the newer names (`scale_factor`, the advanced `EntityRelationship` fields, `ROUND`, `SUBSTRING`, `LUHN_APPEND`, `SHIFT_TIMESTAMP`, `SAMPLE_FROM_COLUMN_WHERE`) fail at *import*, not at generation. See [Requirements](reference/schema-reference.md#requirements).
