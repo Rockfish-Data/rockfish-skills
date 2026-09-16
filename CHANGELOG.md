@@ -14,6 +14,50 @@ documents SDK pitfalls hit along the way: opaque append failures on schema drift
 session metadata passed through `SQL`, `drop_fields` ignored on append, and `Sample`
 rewriting field nullability.
 
+### Added: `generate-from-data`
+
+A skill for the other half of synthetic data: generating it from data you already have,
+rather than inventing rows from a schema. It is the counterpart to `generate-from-schema`,
+and the pair splits on one question - do you have data, or only a description of it?
+
+It is organized as a **loop**, not a pipeline: analyze -> set the quality target -> prepare
+-> train -> generate -> evaluate -> repeat. Setting the target comes before training on
+purpose. `noise_floor()` needs only the real data and tells you the ceiling; `CardSpec`
+is derived from the same profile that configures training; and the SSM/rtf2 trainers take
+the 0.85 gate as `quality_check.min_score`, so the metric is a training input rather than
+a postscript. Step 6 carries a diagnosis table mapping each failing score to the step that
+owns it - more often step 1 or 3 than "train for longer".
+
+It documents the Rockfish SDK as it actually is, which is ahead of
+[docs.rockfish.ai](https://docs.rockfish.ai) in three places:
+
+- **Eight train actions, not four.** Alongside RF-Time-GAN and RF-Tab-GAN, the SDK ships
+  the SSM family (`TrainTabSSM` / `TrainTimeSSM`) and rtf2
+  (`TrainTabTransformerV2` / `TrainTimeTransformerV2`), which supersedes the REaLTabFormer
+  v1 actions. SSM and rtf2 share a flat `encoder` / `model` / `train` / `quality_check`
+  config and an RFScore training stop.
+- **`rockfish.labs.dataset_profiler`** (0.79.0) - `profile_table` -> `recommend` ->
+  `build_train_workflow`, with the drop rules, model routing, chunk planning, and
+  state-machine detection written down.
+- **`rockfish.labs.report_card`** (0.81.0) - `RFScore = min(marginal, correlation,
+  association)` against a noise floor, plus the measurement guards that keep a score
+  honest.
+
+It also writes down two things the docs do not cover:
+
+- **Bounded numeric columns** - a column capped by a constant or by another column
+  (`usage` <= `capacity`). Clipping the model's output piles mass on the boundary;
+  training in logit space and inverting with a sigmoid makes the bound hold by
+  construction. Includes endpoint inflation, because `logit(0)` and `logit(1)` are
+  infinite and real data hits both.
+- **Two silent scoring traps** found while verifying the skill: `tv_distance` returns
+  1.0 - the worst possible score - when one side is arrow `large_string` and the other
+  `string`, with no error; and `marginal_dist_score` raises on any boolean column unless
+  it is named in `other_categorical`.
+
+`reference/train-generate.py` runs end to end and was verified against rockfish 0.82.2
+and a live backend. Its first two examples need no credentials and no GPU.
+
 ## 0.2.0 — breaking
 
 ### Removed: `inject-scenarios`
