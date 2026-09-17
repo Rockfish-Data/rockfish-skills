@@ -242,7 +242,7 @@ Then map the failure to the step that owns it. Going straight to step 4 and addi
 
 `RFScore = min(marginal, correlation, association)`, gate **0.85**. `TS score = min(session_length, autocorr, transition)`. Both are minimums so one broken dimension cannot hide behind three good ones.
 
-Then drill down with `rl.metrics` / `rl.vis` per field, `rl.metrics.distance_to_closest_record_score` and `memorization_rate` for privacy, and the `ra.Evaluate*` actions for privacy attacks and downstream utility. Full detail, including what to change when a score is low: [`reference/evaluation.md`](reference/evaluation.md).
+Then drill down with `rl.metrics` / `rl.vis` per field, `rl.metrics.distance_to_closest_record_score` and `memorization_rate` for privacy, and the `ra.Evaluate*` actions for privacy attacks and downstream utility. Full detail — the exact formula behind every card field, what to change when a score is low, and the privacy and utility surfaces: [`reference/evaluation.md`](reference/evaluation.md).
 
 ## Rules that cause most failures
 

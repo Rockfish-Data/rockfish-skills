@@ -11,6 +11,7 @@ Lead with the [report card](#the-report-card) for fidelity. It gives one compara
 ## Contents
 
 - [The report card](#the-report-card)
+- [How each score is computed](#how-each-score-is-computed)
 - [The measurement guards](#the-measurement-guards)
 - [Per-field fidelity metrics](#per-field-fidelity-metrics)
 - [Session metrics — time series only](#session-metrics--time-series-only)
@@ -63,6 +64,32 @@ card.to_json("run1-card.json")
 Both are **minimums, not averages** — one broken dimension is not allowed to hide behind three good ones. The conventions are fixed so cards stay comparable across runs and surfaces; do not recompute them differently.
 
 Autocorrelation participates only when generation order is trustworthy. Transition participates whenever the cross-distinct-timestamp method was used, which is order-safe by construction. `ts["ts_components_used"]` tells you how many actually counted.
+
+### How each score is computed
+
+Read from `report_card/metrics.py` and `card.py`. A reader checking a published number against a formula needs these, and two of them are easy to get wrong.
+
+| Card field | Formula |
+| --- | --- |
+| `scores.per_column[c].score` | `1 − TVD(real, syn)` for a categorical column; `1 − KS(real, syn)` for a continuous one (`scipy.stats.ks_2samp`, asymptotic) |
+| `scores.marginal` | mean of those per-column scores over **eligible** columns |
+| `scores.correlation` | `exp(−‖Δ‖_F / n)`, where Δ is the difference of the upper triangles of the two **Pearson** correlation matrices over eligible continuous columns and `n` is their count |
+| `scores.association` | the same Frobenius score over **Cramér's V** matrices for eligible categorical columns |
+| `scores.rfscore` | `min` over whichever of marginal / correlation / association are present |
+| `ts.session_length_score` | `1 − KS` between the rows-per-session distributions, on full frames |
+| `ts.autocorr_score` | `1 − mean(|ac_real − ac_syn|) / 2` across columns where both sides are defined |
+| `ts.transition_score` | mean of the per-state-field transition scores |
+| `ts.ts_score` | `min` over whichever TS components are present |
+
+"Eligible" means not **vacuous** — a column whose dominant value holds ≥ `vacuous_dominant_frac` (0.99) of the mass is excluded from all three RFScore components before they are computed.
+
+Three things that surprise people:
+
+- **Correlation and association are matrix-distance scores, not correlations.** `exp(−‖Δ‖_F / n)` decays with the Frobenius norm of the difference between the real and synthetic association matrices. A value of 0.82 is not "82% of the correlation preserved".
+- **A component that cannot be computed is absent, not zero.** `correlation` needs **≥ 2** eligible continuous columns and `association` needs **≥ 2** eligible categorical columns; below that the key is missing and `rfscore` is the min over what remains — possibly `marginal` alone. Check `scores` for which keys are actually present before comparing two cards.
+- **The card's Cramér's V is *not* bias-corrected.** It is plain `sqrt(χ²/n/min(r−1, k−1))` with Yates' continuity correction off. This is a **different function** from [`rl.metrics.cramer_v`](#per-field-fidelity-metrics), which defaults to `correction=True` and applies the Bergsma bias correction. Do not describe the card's `association` as bias-corrected, and do not expect the two to agree.
+
+`ts.autocorr_score` has its own conditions. Per column it is the lag-1 **within-session** Pearson autocorrelation — each value against its predecessor in the same session, after order recovery — over the `autocorr_columns` (8) highest-variance continuous columns in the real data. A column is skipped (`None`, and excluded from the mean) when it has **fewer than 100 usable adjacent pairs** or zero variance on either side, so a short or flat column silently drops out of the score rather than dragging it down. `ts.autocorr_detail` lists the per-column real/synthetic pair.
 
 ### The noise floor
 
@@ -172,7 +199,7 @@ Each guard exists because its absence once produced a badly wrong number. They a
 | `correlation_score(dataset, syn, fields)` | 1 best | numeric pairwise structure |
 | `association_score(dataset, syn, fields)` | 1 best | categorical pairwise structure |
 | `pearsonr(dataset, x, y)` | −1…1 | linear correlation of two numeric fields, with p-value |
-| `cramer_v(dataset, x, y, correction=True)` | 0…1 | association of two categorical fields; bias-corrected by default |
+| `cramer_v(dataset, x, y, correction=True)` | 0…1 | association of two categorical fields; bias-corrected by default. **Not** the function behind the report card's `association` — see [How each score is computed](#how-each-score-is-computed) |
 
 The **overall fidelity score** (`marginal_dist_score`) is a weighted average over marginal distributions: total-variation distance for categorical fields, Kolmogorov–Smirnov for continuous. Tabular datasets score all fields; time-series datasets score metadata, measurements, session length, and interarrival time. Default weight 1 each; `weights={"amount": 3}` reweights.
 
