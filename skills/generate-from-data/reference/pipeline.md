@@ -274,7 +274,7 @@ ra.Transform(ra.Transform.Config(function=FillNullBackward(Field("ts"))))
 | Scalar null fill | `ra.Transform` + `FillNull` / `FillNullAggregation` | — |
 | Remove columns outright | `ra.DropFields` | — |
 | Categorical → integer codes | `ra.LabelEncode` | `ra.LabelDecode` |
-| Heavy right skew (income, latency, size) | `ra.LogEncode` | `ra.LogDecode` |
+| Heavy right skew spanning orders of magnitude (bytes, counts, latency) | `ra.LogEncode` — `log1p`, rounds to 3 dp — see below | `ra.LogDecode` — `expm1` |
 | **Bounded numeric (capped by a constant or another column)** | `ra.SQL` logit projection — see below | `ra.SQL` sigmoid projection |
 | Arithmetic on existing columns, in place | `ra.Transform` + `Add` / `Subtract` / `Multiply` / `Divide` / `Cast` | — |
 | Arithmetic into a **new** column | `ra.Apply(function=…, append_field=…)` | — |
@@ -286,6 +286,15 @@ ra.Transform(ra.Transform.Config(function=FillNullBackward(Field("ts"))))
 | Fix dtypes | `ra.CoerceDtypes` | — |
 
 `ra.Transform` replaces a field in place; `ra.Apply` appends a new one. The `Function` set is fixed (`FillNull`, `FillNullForward`, `FillNullBackward`, `FillNullAggregation`, `Interarrival`, `JoinFields`, `Remap`, `Cast`, `Add`, `Subtract`, `Multiply`, `Divide`) — **there is no `Ln` or `Exp` function**, so anything transcendental goes through `ra.SQL`.
+
+### Numeric columns whose scale fights the model
+
+Two preprocessing cases share one root cause: **the model never sees your units.** Continuous fields are normalised into a fixed range before training and denormalised after, so a column whose values live at a different scale from the model's working range either breaks its own rules or collapses into a single indistinguishable value. Both are fixed by training in a transformed space and inverting afterwards, and the transform is chosen by one question:
+
+| Does the column have a ceiling? | Transform | Inverse | Why |
+| --- | --- | --- | --- |
+| **Yes** — capped by a constant or another column | `logit(v / cap)` | `cap × sigmoid(z)` | the model's output domain becomes the whole real line, so no emitted value can break the bound |
+| **No**, but it spans orders of magnitude | `log1p(v)` | `expm1(z)` | compresses the dynamic range so small values stay distinguishable from each other |
 
 ### Bounded numeric columns
 
@@ -349,6 +358,38 @@ The projection above does both: it clamps for numerical safety *and* carries `us
 **Tell the user what shape to expect.** With Gaussian `z`, the reconstructed column is **logit-normal**, which is bimodal for larger sigma — mass pushed toward both walls. That is correct behavior, not a fitting failure, but it surprises anyone expecting a bell curve around the mean.
 
 Evaluation changes too — see [`evaluation.md`](evaluation.md#bounded-columns).
+
+### Heavy-tailed unbounded columns
+
+A column with **no ceiling but an enormous dynamic range** — bytes transferred, request counts, per-step increments — has the opposite problem. Nothing is violated; instead the whole distribution collapses.
+
+**The reason is normalisation, not the model.** The model does not see bytes; it sees the column normalised into a fixed range. Measured on a real Kubernetes pod-network dataset, per-step increments of `k8s_pod_network_io`:
+
+| Percentile | Raw bytes | Normalised raw | Normalised `log1p` |
+| --- | --- | --- | --- |
+| p50 | 0 | 0.000000 | 0.000 |
+| p90 | 1,664,715 | 0.000588 | 0.658 |
+| p99 | 11,035,023 | 0.003895 | 0.745 |
+| p99.9 | 40,528,674 | 0.014304 | 0.805 |
+| max | 2,833,386,394 | 1.000000 | 1.000 |
+
+A single 2.8 GB outlier sets the scale, so **99.895% of all increments land below 0.01**. A 1.6 MB step and an 11 MB step are the same number to the model, and both are indistinguishable from zero. After `log1p` they sit 0.09 apart. The model is not failing to learn the distribution — it is being handed a column in which the distribution has already been destroyed.
+
+**`log1p`, not `log`.** `log1p(0) = 0`, so exact zeros stay representable; plain `log` gives `-inf` and poisons the fit. That matters more than it sounds: in that dataset **60% of increments are exactly zero**, which is signal — the pod sent nothing that step — not missing data.
+
+The SDK pair already does this:
+
+```python
+builder.add_path(dataset, ra.LogEncode(field="bytes_sent"), train)
+# ... after generation
+builder.add_path(model, generate, ra.LogDecode(field="bytes_sent"), save)
+```
+
+`LogEncode` applies `log1p`, **rounds to 3 decimal places, and casts to float32**; `LogDecode` applies `expm1` and casts back to the original dtype, rounding to `field_ndigits` (default 3). The rounding is a real precision ceiling — about 0.1% relative resolution on the raw value — which is harmless for traffic counters and not harmless for a column where the low-order digits carry meaning. `LogDecode` recovers the original dtype from table metadata that `LogEncode` pushed, so the two must stay paired in the same workflow lineage.
+
+Use a `ra.SQL` projection instead when you need the transform without the rounding, or when the column is a **counter**: model the per-step increment rather than the level, so `log1p(diff)` on the way in and `cumsum(expm1(...))` on the way out, which also keeps the reconstructed series monotone.
+
+**Do not stack the two transforms casually.** A quantity that is both unbounded in aggregate and bounded per part — a memory total and its components — is handled by transforming the envelope with `log1p` and each dependent as `logit(part / envelope)`, so the parts stay under the total that was generated for them.
 
 ## Training
 
