@@ -26,6 +26,24 @@ A skill can bundle a reference implementation under `skills/<skill-name>/referen
 
 After adding or editing a skill, install and test it locally.
 
+## Checks
+
+CI runs two jobs on every pull request ([`.github/workflows/checks.yml`](.github/workflows/checks.yml)); both are worth running locally first.
+
+**Skill frontmatter.** A `SKILL.md` whose YAML frontmatter does not parse is not a skill with a bug — it is a skill the host never loads, and nothing else notices. This has happened: an unquoted `description:` containing `": "` is a parse error, because a plain YAML scalar may not contain a colon followed by a space.
+
+```bash
+pip install pyyaml && python scripts/check_skills.py
+```
+
+**`generate-from-data` smoke test.** Examples 1 and 2 of its reference script need no credentials and no GPU, and exercise the profiler and the report card against the real SDK.
+
+```bash
+python skills/generate-from-data/reference/train-generate.py -e 1 -e 2
+```
+
+Examples 3 and 4 of that script train real models on a Rockfish backend, so they need credentials and stay a manual pre-release step rather than part of CI.
+
 ## Pull requests
 
 - Open a PR against `main`.
