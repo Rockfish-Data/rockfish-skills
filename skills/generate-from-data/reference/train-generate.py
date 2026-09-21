@@ -1,32 +1,19 @@
 """End-to-end model-based generation with the Rockfish SDK, with real checks.
 
 `models.md`, `pipeline.md` and `evaluation.md` in this directory cover the API
-surface. This file covers what a reference has to show rather than describe:
+surface. This file serves as a coding example:
 what the calls look like in sequence, which assertions actually hold, and where
 the shapes change between the source data and the generated data.
 
-Four examples. The first two need no credentials and no GPU:
-
-  1. Profile + recommend      -> the routing rules on two real-shaped tables,
-                                 including which columns get dropped and why.
-  2. Report card              -> RFScore, TS score, and the noise floor, scored
-                                 on a deliberately degraded copy of real data.
-  3. Tabular train + generate -> RF-Tab-GAN end to end, then marginal fidelity.
-                                 Needs a connection and trains a real model.
-  4. Time-series train + gen  -> RF-Time-GAN with a SessionTarget loop, session
-                                 metrics, and a report card against the
-                                 generator's own session key. Needs a
-                                 connection and trains a real model.
+There are 4 examples that can be run through this script:
+  # Profile + recommend: the routing rules on two real-shaped tables, including which columns get dropped and why.
+  # Report card: RFScore, TS score, and the noise floor, scored on a deliberately degraded copy of real data.
+  # Tabular train + generate: RF-Tab-GAN end to end, then marginal fidelity.
+  # Time-series train + gen: RF-Time-GAN with a SessionTarget loop, session metrics, and a report card against the generator's own session key.
 
 Examples 3 and 4 submit real training workflows. They use deliberately tiny
 epoch counts so they finish in minutes; the data they produce is a smoke test,
-not a fidelity result.
-
-Requires rockfish >= 0.82.2 plus pandas and numpy. The individual pieces landed
-earlier (dataset_profiler in 0.79.0, report_card in 0.81.0), but 0.82.2 is the
-version this script was verified against and the only one its documented
-behaviour is known to match, so that is the floor it enforces. Examples 3 and 4
-also need credentials from ~/.config/rockfish/config.toml or the ROCKFISH_*
+not a fidelity result.  They also need credentials from ~/.config/rockfish/config.toml or the ROCKFISH_*
 environment variables.
 
 Exits non-zero if any check fails, so it works as a smoke test.
@@ -41,22 +28,7 @@ import asyncio
 import os
 import sys
 
-MIN_SDK = "0.82.2"
-
 try:
-    from importlib import metadata as _metadata
-
-    _installed = _metadata.version("rockfish")
-    # Compare as integer tuples so 0.9.0 does not sort above 0.82.2.
-    def _ver(v):
-        return tuple(int(p) for p in v.split(".")[:3] if p.isdigit())
-
-    if _ver(_installed) < _ver(MIN_SDK):
-        sys.exit(
-            f"rockfish {_installed} is installed; this script needs >= {MIN_SDK}.\n"
-            "    pip install -U 'rockfish[labs]' -f https://packages.rockfish.ai"
-        )
-
     import numpy as np
     import pandas as pd
     import pyarrow as pa
@@ -71,14 +43,9 @@ try:
     from rockfish.labs.report_card import StateFieldSpec
     from rockfish.labs.report_card import noise_floor
     from rockfish.labs.report_card import score
-except _metadata.PackageNotFoundError:  # pragma: no cover
-    sys.exit(
-        "rockfish is not installed; this script needs it plus pandas/numpy:\n"
-        "    pip install -U 'rockfish[labs]' -f https://packages.rockfish.ai"
-    )
 except ImportError as exc:  # pragma: no cover
     sys.exit(
-        f"{exc}\n\nThis script needs rockfish >= {MIN_SDK} with pandas/numpy:\n"
+        f"{exc}\n\nThis script needs rockfish[labs] with pandas/numpy:\n"
         "    pip install -U 'rockfish[labs]' -f https://packages.rockfish.ai"
     )
 

@@ -270,7 +270,7 @@ Then drill down with `rl.metrics` / `rl.vis` per field, `rl.metrics.distance_to_
 - **Bounded numeric columns need a logit transform, not clipping.** A column capped by a constant or by another column (`usage` ≤ `capacity`) will generate out-of-range values, and clipping piles mass on the boundary that evaluation then reports as a spike the real data lacks. Nothing detects these automatically — see [`reference/pipeline.md`](reference/pipeline.md#bounded-numeric-columns).
 - **State-machine columns encoded as floats are a trap.** A phase column stored as `1.0 / 2.0 / 3.0` trains as a continuous variable and generates `2.37`. The profiler records low-cardinality numerics in `config.categorical_cast_columns` for a VARCHAR cast — apply it.
 - **Legal transitions are enforced at decode, frequency is not.** `sampling.state_constraints` makes illegal transitions unsampleable but does not control how often the model transitions; for that, upweight the field with `train.state_field_loss_weights` (typical weight 10). Both are honored by the SSM time path only — rtf2 warns and ignores.
-- **This skill targets rockfish ≥ 0.82.2**, and was verified against it end to end. `dataset_profiler` needs ≥ 0.79.0 (`state_constraints` and `sequence_index_column` land there too) and `report_card` needs ≥ 0.81.0. On an older SDK those names fail at *import*, not at run time.
+- **Use a recent `rockfish[labs]`; this was verified against 0.82.2.** `dataset_profiler`, `report_card`, `state_constraints`, and `sequence_index_column` are all recent additions, and on an SDK that predates them the imports fail outright rather than degrading — so an `ImportError` naming one of those modules means the SDK is too old, not that the code is wrong.
 
 ## Reference
 

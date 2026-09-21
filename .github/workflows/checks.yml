@@ -41,7 +41,7 @@ jobs:
       - name: Install the Rockfish SDK
         run: |
           pip install --find-links https://packages.rockfish.ai \
-            'rockfish[labs]>=0.82.2' pandas numpy pyarrow
+            'rockfish[labs]' pandas numpy pyarrow
       - name: Report the installed SDK version
         run: python -c "from importlib import metadata; print('rockfish', metadata.version('rockfish'))"
       - name: Offline examples (profile + recommend, report card)
