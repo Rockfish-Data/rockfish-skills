@@ -1,4 +1,4 @@
 --find-links https://packages.rockfish.ai
-rockfish[labs]
+rockfish[labs]>=0.82.2               # generate-from-data: report_card, dataset_profiler
 snowflake-connector-python[pandas]  # snowflake-analyst skill
 tomli; python_version < "3.11"      # snowflake-analyst: tomllib backport

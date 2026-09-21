@@ -194,7 +194,7 @@ Each guard exists because its absence once produced a badly wrong number. They a
 | `jsd(ds1, ds2, fields)` | 0 best | categorical distributions |
 | `emd(ds1, ds2, fields)` | 0 best, ∞ worst | numerical distributions (Wasserstein) |
 | `range_coverage(ds1, ds2, field)` | 1 best | does synthetic span the real range |
-| `category_coverage(ds1, ds2, field)` | 1 best | share of real categories that appear |
+| `category_coverage(ds1, ds2, field)` | 1 best | share of real categories that appear. **Raises** `AssertionError` when the synthetic column has more distinct values than the real one — wrap it, because an unseen generated category is a finding, not a reason to abort. It is a bare `assert`, so under `python -O` it vanishes and the score is divided by the real category count regardless |
 | `range_adherence_score(dataset, syn, fields)` | 1 best | share of synthetic values inside the real range (numeric or temporal) |
 | `correlation_score(dataset, syn, fields)` | 1 best | numeric pairwise structure |
 | `association_score(dataset, syn, fields)` | 1 best | categorical pairwise structure |

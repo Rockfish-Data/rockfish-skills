@@ -22,9 +22,12 @@ Examples 3 and 4 submit real training workflows. They use deliberately tiny
 epoch counts so they finish in minutes; the data they produce is a smoke test,
 not a fidelity result.
 
-Requires rockfish >= 0.81.0 (report_card landed there; dataset_profiler in
-0.79.0) plus pandas and numpy. Examples 3 and 4 also need credentials from
-~/.config/rockfish/config.toml or the ROCKFISH_* environment variables.
+Requires rockfish >= 0.82.2 plus pandas and numpy. The individual pieces landed
+earlier (dataset_profiler in 0.79.0, report_card in 0.81.0), but 0.82.2 is the
+version this script was verified against and the only one its documented
+behaviour is known to match, so that is the floor it enforces. Examples 3 and 4
+also need credentials from ~/.config/rockfish/config.toml or the ROCKFISH_*
+environment variables.
 
 Exits non-zero if any check fails, so it works as a smoke test.
 
@@ -38,9 +41,22 @@ import asyncio
 import os
 import sys
 
-MIN_SDK = "0.81.0"
+MIN_SDK = "0.82.2"
 
 try:
+    from importlib import metadata as _metadata
+
+    _installed = _metadata.version("rockfish")
+    # Compare as integer tuples so 0.9.0 does not sort above 0.82.2.
+    def _ver(v):
+        return tuple(int(p) for p in v.split(".")[:3] if p.isdigit())
+
+    if _ver(_installed) < _ver(MIN_SDK):
+        sys.exit(
+            f"rockfish {_installed} is installed; this script needs >= {MIN_SDK}.\n"
+            "    pip install -U 'rockfish[labs]' -f https://packages.rockfish.ai"
+        )
+
     import numpy as np
     import pandas as pd
     import pyarrow as pa
@@ -55,6 +71,11 @@ try:
     from rockfish.labs.report_card import StateFieldSpec
     from rockfish.labs.report_card import noise_floor
     from rockfish.labs.report_card import score
+except _metadata.PackageNotFoundError:  # pragma: no cover
+    sys.exit(
+        "rockfish is not installed; this script needs it plus pandas/numpy:\n"
+        "    pip install -U 'rockfish[labs]' -f https://packages.rockfish.ai"
+    )
 except ImportError as exc:  # pragma: no cover
     sys.exit(
         f"{exc}\n\nThis script needs rockfish >= {MIN_SDK} with pandas/numpy:\n"
@@ -464,8 +485,19 @@ async def example_tabular(conn) -> None:
     )
     # Coverage is type-agnostic, so it is the cross-check that tells you a 1.0
     # tv_distance was an artifact rather than a genuine total mismatch.
-    coverage = rl.metrics.category_coverage(dataset, syn, "region")
-    check("every real category appears in the synthetic data", coverage == 1.0, f"{coverage:.4f}")
+    #
+    # category_coverage carries a bare `assert` that the synthetic column has no
+    # MORE distinct values than the real one. A generator emitting an unseen
+    # category is a finding, not a reason to abort the run -- and because it is
+    # an assert it vanishes under `python -O`, so the same input either raises
+    # or silently divides by a wrong denominator depending on how you launched.
+    try:
+        coverage = rl.metrics.category_coverage(dataset, syn, "region")
+        check("every real category appears in the synthetic data",
+              coverage == 1.0, f"{coverage:.4f}")
+    except AssertionError:
+        check("every real category appears in the synthetic data", False,
+              "synthetic emitted categories absent from the real data")
 
     fidelity = rl.metrics.marginal_dist_score(matched, syn, other_categorical=categorical)
     print(f"  marginal fidelity: {fidelity:.4f}")
