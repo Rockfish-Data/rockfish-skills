@@ -19,7 +19,7 @@ Use a different skill when:
 
 ## The loop
 
-This is not a pipeline that runs once. It is a loop, and the loop is the skill:
+This is an interative pipeline that output from the later steps can provide feedback to one of the previous steps.  The skill helps define each steps and close the different loops:
 
 ```
    ┌──────────────────────────────────────────────────────────────────────┐
@@ -33,13 +33,13 @@ This is not a pipeline that runs once. It is a loop, and the loop is the skill:
    bounds         the gate
 ```
 
-**Step 2 is the one people skip, and it has to come before step 4.** You need to define the target first, often after analyzing the data, before the preparation step all the way to generate the data. Three concrete reasons it belongs up front:
+**Step 2 comes first** because you need to define the target first, often after analyzing the data, before the preparation step all the way to generate the data. Three concrete reasons it belongs up front:
 
 - `noise_floor()` needs **only the real data**. Run it before you train anything. It tells you the ceiling, and sometimes it tells you the data cannot support the ask at all.
 - `CardSpec.from_profile()` is built from the step-1 profile. Analysis produces the evaluation spec and the training config *from the same object*, so they cannot drift apart.
-- The SSM and rtf2 trainers take `quality_check.min_score` (default **0.85**) as a training input and stop when they reach it. That is the same 0.85 the report card gates on. The metric is not a postscript; it is a hyperparameter.
+- The SSM and rtf2 trainers take `quality_check.min_score` (default **0.85**) as a training input and stop when they reach it. That is the same 0.85 the report card gates on. The metric in this case becomes a hyperparameter as part of the inputs to the training model.
 
-Steps 3–5 are Rockfish **workflows** — a `WorkflowBuilder` graph submitted to the backend. Steps 1, 2, and 6 are local.
+Steps 3–5 are Rockfish **workflows** — a `WorkflowBuilder` graph submitted to the Rockfish backend running on GPUs. Steps 1, 2, and 6 consumes CPUs and can be local depending on the details.
 
 **One turn of the loop costs a training run.** Before spending another, exhaust the cheap moves: step 6 tells you which step owns the failure, and the answer is more often 1 or 3 than 4. See [Evaluate and diagnose](#6-evaluate-and-diagnose).
 
@@ -77,9 +77,9 @@ print(config.decision, config.rule_fired)   # e.g. "time_ssm" "R3"
 print(config.drop_columns, config.warnings, config.notes)
 ```
 
-Always show `config.decision`, `config.drop_columns`, and `config.warnings` to the user before going further — the recommender silently drops ID-like, constant, and mostly-null columns, and that is the single most surprising thing it does.
+Always show `config.decision`, `config.drop_columns`, and `config.warnings` to the user before going further.  By default, the recommender silently drops ID-like, constant, and mostly-null columns, and those need to be confirmed by the user to avoid surprises.
 
-Also settle here, while you are looking at the data: **which columns are bounded** (capped by a constant or by another column) and **which are state machines**. Neither is auto-detected end to end, both change step 3, and finding them after a training run costs a full turn of the loop.
+Also settle here, while you are looking at the data: **which columns are bounded** (capped by a constant or by another column) and **which are state machines**. They will influence the design in step 3, and finding them early means fewer iterations.
 
 ## 2. Set the target
 
@@ -95,7 +95,7 @@ print(floor.summary())
 
 `CardSpec.from_profile` carries the profiler's detected state fields and counters straight into evaluation, so the thing you measure is the thing you analyzed. Add `metadata_columns=` by hand.
 
-**It silently drops the transition maps** — `from_profile` reads an attribute name the profiler does not define, so `legal_transitions` is always `None` and the card falls back to whatever the real sample happened to show. If the user confirmed a legal-transition map, set `StateFieldSpec(legal_transitions=...)` yourself; see [`reference/evaluation.md`](reference/evaluation.md#the-report-card).
+**Explicity define the transition maps** — `from_profile` reads an attribute name the profiler does not define, so `legal_transitions` is always `None` and the card falls back to whatever the real sample happened to show. If the user confirmed a legal-transition map, set `StateFieldSpec(legal_transitions=...)` yourself; see [`reference/evaluation.md`](reference/evaluation.md#the-report-card).
 
 Then write down three things:
 
@@ -111,7 +111,7 @@ If the floor itself comes back low, stop and go back to step 1 — usually the s
 
 Drops, fills, and casts fold into **one** `ra.SQL` projection; directional fills become `ra.Transform` pairs. Full detail and the transform reference table are in [`reference/pipeline.md`](reference/pipeline.md#preprocessing).
 
-The three that matter most, because nothing catches them downstream:
+Here is a list of best practices accumulated through the time:
 
 - **Bounded numeric columns** — capped by a constant or another column (`usage` ≤ `capacity`). Train on `ln(p/(1-p))`, invert with `capacity / (1 + exp(-z))`, so the bound holds by construction. Clipping instead piles mass on the boundary that step 6 then reports as a spike the real data lacks. See [bounded numeric columns](reference/pipeline.md#bounded-numeric-columns).
 - **Heavy-tailed unbounded columns** — bytes, counts, per-step increments. The model sees the column normalised, so one large outlier can push 99%+ of the values below 0.01, where distinct magnitudes become the same number. `ra.LogEncode` / `ra.LogDecode` (`log1p` / `expm1`) restores the resolution; `log1p` rather than `log` so exact zeros survive. See [heavy-tailed unbounded columns](reference/pipeline.md#heavy-tailed-unbounded-columns).
@@ -120,19 +120,17 @@ The three that matter most, because nothing catches them downstream:
 
 ## 4. Train
 
-Pick the model first. If you are overriding the recommender, pick by data shape, then by budget.
+Pick the model first. `recommend()` decides this from the data's shape; the same mapping is below for when you are overriding it.
 
-| Data | Model | Action | Notes |
-| --- | --- | --- | --- |
-| Time series, **≥ 3 continuous measurements** | RF-Time-GAN | `ra.TrainTimeGAN` | GAN handles floats natively; a transformer tokenizes each float into new vocabulary |
-| Time series, many sessions (≥ 50), 4–500 rows each | **SSM** | `ra.TrainTimeSSM` | current premium default for session data |
-| Time series, few sessions or very long sessions (> 500 rows) | RF-Time-GAN | `ra.TrainTimeGAN` | or `TrainTimeSSM` with `sub_session_chunk_size` |
-| Time series, want an attention model | rtf2 | `ra.TrainTimeTransformerV2` | successor to `TrainTimeTransformer` |
-| Tabular, ≥ 1000 rows with real categorical structure | **SSM** | `ra.TrainTabSSM` | current premium tabular default |
-| Tabular, small (< 1000 rows) or almost all numeric | RF-Tab-GAN | `ra.TrainTabGAN` | fastest to train |
-| Tabular, want an attention model | rtf2 | `ra.TrainTabTransformerV2` | successor to `TrainTabTransformer` |
+| Data shape | Time-GAN | Tab-GAN | rtf2 | SSM |
+| --- | :---: | :---: | :---: | :---: |
+| Time series, ≥ 3 continuous measurements | ✓ | | | |
+| Time series, few sessions (< 50) or very long ones (> 500 rows) | ✓ | | | ✓ |
+| Time series, many sessions (≥ 50) of 4–500 rows | | | ✓ | ✓ |
+| Tabular, < 1000 rows or almost all numeric | | ✓ | | |
+| Tabular, ≥ 1000 rows with categorical structure | | ✓ | ✓ | ✓ |
 
-**`TrainTabTransformer` / `TrainTimeTransformer` (rtf v1) are superseded by the V2 actions.** Prefer V2 in new code; keep v1 only to reproduce an existing model. `dataset_profiler` already maps a `tab_transformer` / `time_transformer` decision onto the V2 actions.
+Where several apply, SSM is the current default and the GANs are the cheapest to train. Why each row routes the way it does, the `recommend()` rules behind it, and the config and hyperparameters for every family: [`reference/models.md`](reference/models.md).
 
 Every train action takes an **encoder config** (which field plays which role, and how each is encoded) and a **model config** (hyperparameters).
 

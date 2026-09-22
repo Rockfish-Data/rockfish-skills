@@ -52,9 +52,20 @@ Two opt-in overrides on `recommend()`:
 - `prefer_ssm_for_long_sessions=True` reroutes R1-shaped data (avg session length > 500) from `time_gan` to `time_ssm`, deriving `sub_session_chunk_size` and `output_max_length` from a token budget.
 - `prefer_ssm=True` prefers the SSM family generally.
 
-The reasoning behind R0 is worth internalizing: **continuous floats are a GAN's strength and a transformer's weakness.** A token-based model turns every distinct float into new vocabulary, which is unbounded and learns nothing. Conversely, categorical structure and long-range within-session dependencies are what the SSM and transformer families are good at.
+### Why each shape routes where it does
 
-Training cost, roughly ascending: RF-Tab-GAN < RF-Time-GAN < SSM ≈ rtf2 < rtf v1.
+| Data shape | Goes to | Because |
+| --- | --- | --- |
+| Time series, ≥ 3 continuous measurements | Time-GAN | **Continuous floats are a GAN's strength and a token model's weakness.** A token-based model turns every distinct float into new vocabulary, which is unbounded and learns nothing |
+| Time series, few sessions (< 50) | Time-GAN | too few sequences for a token model to learn from. SSM is viable but has less to work with |
+| Time series, very long sessions (> 500 rows) | Time-GAN | avoids the token budget a sequence model needs. SSM works here too with `sub_session_chunk_size` set — see `prefer_ssm_for_long_sessions` above |
+| Time series, many sessions (≥ 50) of 4–500 rows | SSM, or rtf2 | the shape a state-space model handles best; categorical structure and long-range within-session dependency are what these families are for. rtf2 is the attention-based alternative |
+| Tabular, < 1000 rows or almost all numeric | Tab-GAN | fastest to train, and a token model has little categorical structure to exploit |
+| Tabular, ≥ 1000 rows with categorical structure | SSM, or rtf2 | enough rows and enough structure to be worth the premium families. Tab-GAN remains the cheap option |
+
+Where several families apply, **SSM is the current default** and the GANs are the cheapest to train. Training cost, roughly ascending: RF-Tab-GAN < RF-Time-GAN < SSM ≈ rtf2 < rtf v1.
+
+**`TrainTabTransformer` / `TrainTimeTransformer` (rtf v1) are superseded by the V2 actions.** Prefer rtf2 in new code and keep v1 only to reproduce an existing model; `dataset_profiler` already maps a `tab_transformer` / `time_transformer` decision onto the V2 actions.
 
 ## The encoder config (shared by every model)
 
