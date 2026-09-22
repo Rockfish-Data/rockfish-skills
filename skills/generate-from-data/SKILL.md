@@ -124,13 +124,17 @@ Pick the model first. `recommend()` decides this from the data's shape; the same
 
 | Data shape | Time-GAN | Tab-GAN | rtf2 | SSM |
 | --- | :---: | :---: | :---: | :---: |
-| Time series, ≥ 3 continuous measurements | ✓ | | | |
-| Time series, few sessions (< 50) or very long ones (> 500 rows) | ✓ | | | ✓ |
-| Time series, many sessions (≥ 50) of 4–500 rows | | | ✓ | ✓ |
-| Tabular, < 1000 rows or almost all numeric | | ✓ | | |
-| Tabular, ≥ 1000 rows with categorical structure | | ✓ | ✓ | ✓ |
+| Time series, ≥ 3 continuous measurements | **1** | | ✓ | 2 |
+| Time series, few sessions (< 50) or very long ones (> 500 rows) | **1** | | ✓ | 2 |
+| Time series, many sessions (≥ 50) of 4–500 rows | 2 | | ✓ | **1** |
+| Tabular, < 1000 rows or almost all numeric | | **1** | ✓ | 2 |
+| Tabular, ≥ 1000 rows with categorical structure | | 2 | ✓ | **1** |
 
-Where several apply, SSM is the current default and the GANs are the cheapest to train. Why each row routes the way it does, the `recommend()` rules behind it, and the config and hyperparameters for every family: [`reference/models.md`](reference/models.md).
+**1** is what `recommend()` picks for that shape — start there. **2** is the next one to try if the report card disappoints. **✓** means rtf2 will train on that shape, but `recommend()` never selects it: reach for it deliberately when you want an attention model, not as the next step in an iteration.
+
+The 1/2 ordering is Rockfish's own position, not a benchmark: the recommender treats **SSM as the first-choice family and the GANs as a fallback** (`prefer_ssm` overrides any GAN routing with the note *"SSM first, GAN as fallback"*), while the default rules still send a few shapes to a GAN — continuous-heavy time series most of all, since a GAN models floats natively where a token model turns each distinct value into new vocabulary. There is no published fidelity comparison between these families, so past the first choice, iterate by measuring: run step 6, and let the floor and the card decide.
+
+Full routing rules, the reasoning per shape, and the config and hyperparameters for every family: [`reference/models.md`](reference/models.md).
 
 Every train action takes an **encoder config** (which field plays which role, and how each is encoded) and a **model config** (hyperparameters).
 
