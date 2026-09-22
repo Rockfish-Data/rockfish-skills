@@ -23,7 +23,7 @@ Lead with the [report card](#the-report-card) for fidelity. It gives one compara
 
 ## The report card
 
-`rockfish.labs.report_card` — needs rockfish ≥ 0.81.0. Operates on pandas DataFrames, locally.
+`rockfish.labs.report_card`: Operates on pandas DataFrames, locally.
 
 ```python
 from rockfish.labs.report_card import CardSpec, StateFieldSpec, noise_floor, score
@@ -61,7 +61,7 @@ card.to_json("run1-card.json")
 `RFScore = min(marginal, correlation, association)`, gate **0.85**.
 `TS score = min(session_length, lag1_autocorr, transition)`.
 
-Both are **minimums, not averages** — one broken dimension is not allowed to hide behind three good ones. The conventions are fixed so cards stay comparable across runs and surfaces; do not recompute them differently.
+Both are **minimums**, which means that one broken dimension is not allowed to hide behind three good ones. The conventions are fixed so cards stay comparable across runs and surfaces; do not recompute them differently.
 
 Autocorrelation participates only when generation order is trustworthy. Transition participates whenever the cross-distinct-timestamp method was used, which is order-safe by construction. `ts["ts_components_used"]` tells you how many actually counted.
 
@@ -223,12 +223,6 @@ real = rf.Dataset.from_table(real.name(), table)
 ```
 
 `category_coverage` is type-agnostic, so it is the cross-check: a `tv_distance` of 1.0 alongside a `category_coverage` of 1.0 means the type gap, not a real mismatch.
-
-`rockfish.labs.SDA` wraps this for time series — it extracts properties for both datasets, drops the timestamp and session key, and calls `marginal_dist_score`:
-
-```python
-score = rl.SDA(source, syn).get_score()
-```
 
 ## Session metrics — time series only
 
