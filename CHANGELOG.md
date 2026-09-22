@@ -55,8 +55,9 @@ It also writes down two things the docs do not cover:
   `string`, with no error; and `marginal_dist_score` raises on any boolean column unless
   it is named in `other_categorical`.
 
-`reference/train-generate.py` runs end to end and was verified against rockfish 0.82.2
-and a live backend. Its first two examples need no credentials and no GPU.
+`reference/train-generate.py` carries two examples, one per data shape, each walking the
+whole loop and stating why its model was chosen. Both train real models on a Rockfish
+backend and need credentials; verified against rockfish 0.82.2 on a live backend.
 
 ## 0.2.0 — breaking
 

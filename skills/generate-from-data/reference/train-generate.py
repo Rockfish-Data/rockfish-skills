@@ -586,7 +586,12 @@ async def example_timeseries(conn) -> None:
         state_fields=[StateFieldSpec(
             "status", legal_transitions={(a, b) for a, bs in legal.items() for b in bs})],
         metadata_columns=["region", "tier"],
-        counters=["bytes_delta"],
+        # NOT counters=["bytes_delta"]. CardSpec.counters means per-session
+        # MONOTONE columns, and counter_monotonicity scores (diff >= 0). The
+        # prepared column is log1p of the increment -- non-negative, but its own
+        # diff goes up and down, so declaring it a counter scores 0.51 on real
+        # data whose true counter scores 1.0. Reconstruct the level with
+        # cumsum(expm1(...)) after generation and score that instead.
     )
     floor = noise_floor(prepared_real, spec)
     print(floor.summary())
