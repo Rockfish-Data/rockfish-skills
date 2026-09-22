@@ -67,7 +67,7 @@ Two opt-in overrides on `recommend()`:
 
 The recommender's own position, from the `prefer_ssm` branch: **SSM is the first-choice family for both shapes and the GANs are a fallback** — setting `prefer_ssm=True` rewrites any GAN decision to its SSM counterpart with the note *"SSM first, GAN as fallback"*. The default R0–R5 rules still route some shapes to a GAN anyway, which is not a contradiction: R0 in particular is a quality argument (floats), not a cost one.
 
-**rtf2 is never selected automatically.** No rule produces `tab_rtf2` or `time_rtf2`; those decisions exist only for a caller who asks, and `dataset_profiler` reaches the V2 actions solely by mapping a legacy `tab_transformer` / `time_transformer` decision onto them. Treat rtf2 as a deliberate choice when you want an attention model, not as the next rung after the recommender's pick.
+**rtf2 is not selected automatically.** Due to the freshness of this model, no current rule produces `tab_rtf2` or `time_rtf2`; those decisions exist only for a caller who asks, and `dataset_profiler` reaches the V2 actions solely by mapping a legacy `tab_transformer` / `time_transformer` decision onto them. Treat rtf2 as a deliberate choice when you want an attention model, not as the next rung after the recommender's pick.
 
 So, to iterate: **start with what `recommend()` chose**, and if the card disappoints, cross the GAN/SSM line before anything else. Past that there is **no published fidelity comparison** between these families — measure with the report card rather than assuming an ordering.
 

@@ -263,7 +263,7 @@ Transitions can be counted three ways. For `Session 1: A→B→B` and `Session 2
 
 ## Visualizing — fetch the data, render it yourself
 
-**Do not reach for `rockfish.labs.vis`.** It is a thin matplotlib/seaborn wrapper that draws a figure and returns nothing, which makes it the wrong shape for an agent: you cannot inspect what it drew, caption it, restyle it, or put it in a report. Every comparison it offers is available as *data*, and an agent renders that far better than a fixed plotting helper can.
+**Do not reach for `rockfish.labs.vis`.** It is being deprecated. It is a thin matplotlib/seaborn wrapper that draws a fixed figure.
 
 The useful property is that **each `rf.metrics.*` function returns a `LocalDataset`**, so `.to_pandas()` gives you a frame to plot however you like:
 
