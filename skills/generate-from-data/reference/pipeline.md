@@ -115,7 +115,7 @@ config = recommend(profile, session_hints={"session_key": "customer"})
 
 | Rule | Drops |
 | --- | --- |
-| D1 | ≥ 200 rows and > 95% distinct strings/numerics — identifiers; recreate post-hoc as UUIDs |
+| D1 | ≥ 200 rows and > 95% distinct strings/numerics — identifiers; recreate post-hoc as UUIDs. **Watch this one on continuous columns**: a float sensor reading or a monotone counter is near-unique by nature, so real measurements get caught by a rule meant for IDs (the note even calls them "high-cardinality unique string"). Worse, the drop feeds the continuous-measurement count that [model routing](models.md#choosing-a-model) uses, so it can silently change which model you are told to train |
 | D2b | name matches an identifier/audit-reference pattern, **at any cardinality** — a foreign key repeats by nature, so a ratio test structurally cannot catch it |
 | D2 | name looks like an ID and > 50% distinct |
 | D3 | constant (≤ 1 distinct) — reattach post-hoc |

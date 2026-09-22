@@ -1,26 +1,40 @@
 """End-to-end model-based generation with the Rockfish SDK, with real checks.
 
 `models.md`, `pipeline.md` and `evaluation.md` in this directory cover the API
-surface. This file serves as a coding example:
-what the calls look like in sequence, which assertions actually hold, and where
-the shapes change between the source data and the generated data.
+surface. This file is the coding example: what the calls look like in sequence,
+which assertions actually hold, and where the shapes change between the source
+data and the generated data.
 
-There are 4 examples that can be run through this script:
-  # Profile + recommend: the routing rules on two real-shaped tables, including which columns get dropped and why.
-  # Report card: RFScore, TS score, and the noise floor, scored on a deliberately degraded copy of real data.
-  # Tabular train + generate: RF-Tab-GAN end to end, then marginal fidelity.
-  # Time-series train + gen: RF-Time-GAN with a SessionTarget loop, session metrics, and a report card against the generator's own session key.
+Two examples. Each walks the full six-step loop the skill is built around --
+analyze, set the target, prepare, train, generate, evaluate -- and each says out
+loud WHY its model was chosen for its data, because that is the decision a
+reader most needs to be able to reproduce on their own table.
 
-Examples 3 and 4 submit real training workflows. They use deliberately tiny
-epoch counts so they finish in minutes; the data they produce is a smoke test,
-not a fidelity result.  They also need credentials from ~/.config/rockfish/config.toml or the ROCKFISH_*
-environment variables.
+  1. Tabular (orders)       A bounded ratio and a heavy-tailed counter, so the
+                            preparation step carries the logit and log1p
+                            transforms. Evaluated with marginal fidelity: a
+                            table with no session key has no report card.
 
-Exits non-zero if any check fails, so it works as a smoke test.
+  2. Time-series (sessions)  An epoch-numeric timestamp, a float-coded state
+                            machine, a gappy measurement and a monotone counter,
+                            so preparation carries the cast, the directional
+                            fill pair and the increment trick. Evaluated with
+                            the full report card against a noise floor measured
+                            before training.
+
+Between them they exercise every preprocessing tip the skill documents.
+
+Both train real models on a Rockfish backend and need credentials from
+~/.config/rockfish/config.toml or the ROCKFISH_* environment variables. Epoch
+counts are deliberately small so a run finishes in minutes: this is a smoke test
+of the pipeline, not a fidelity result, and the scores it prints should not be
+read as representative.
+
+Exits non-zero if any check fails.
 
 Run:
-    python train-generate.py                   # all four
-    python train-generate.py -e 1 -e 2         # offline only
+    python train-generate.py                   # both
+    python train-generate.py -e 1              # tabular only
     python train-generate.py --connection env  # force ROCKFISH_* env vars
 """
 import argparse
@@ -36,6 +50,7 @@ try:
     import rockfish as rf
     import rockfish.actions as ra
     import rockfish.labs as rl
+    from rockfish.labs.dataset_profiler import decode_constraints
     from rockfish.labs.dataset_profiler import detect_state_fields
     from rockfish.labs.dataset_profiler import profile_table
     from rockfish.labs.dataset_profiler import recommend
@@ -50,6 +65,7 @@ except ImportError as exc:  # pragma: no cover
     )
 
 FAILURES: list[str] = []
+EPS = 1e-6
 
 
 def check(label: str, condition: bool, detail: str = "") -> None:
@@ -60,6 +76,10 @@ def check(label: str, condition: bool, detail: str = "") -> None:
         FAILURES.append(label)
 
 
+def step(n: int, title: str) -> None:
+    print(f"\n  --- step {n}: {title} ---")
+
+
 def connect(mode: str):
     """Open a Connection from the config file or the ROCKFISH_* env vars."""
     if mode == "env" or (mode == "auto" and os.environ.get("ROCKFISH_API_KEY")):
@@ -67,83 +87,112 @@ def connect(mode: str):
     return rf.Connection.from_config()
 
 
+def to_dataset(name: str, df: pd.DataFrame):
+    # rf.Dataset(...) raises on purpose -- always go through a from_* factory.
+    return rf.Dataset.from_pandas(name, df)
+
+
+async def run(conn, builder, label: str):
+    """Start a workflow, wait for it, and return it."""
+    workflow = await builder.start(conn)
+    print(f"  {label} workflow: {workflow.id()}")
+    await workflow.wait(raise_on_failure=True)
+    return workflow
+
+
 # ---------------------------------------------------------------------------
 # Source data
 #
-# Both generators produce data with structure a model can actually learn --
-# correlated numerics, a genuine state machine, session-constant metadata --
-# and with the traps the profiler is built to catch: a near-unique id column, a
-# constant column, and a state field coded as a float.
+# Fabricated locally so the script is self-contained, but shaped so every
+# preprocessing rule the skill documents has something real to act on: an
+# identifier to drop, a constant to drop, nulls to fill, a bounded ratio, a
+# heavy-tailed counter, a float-coded state machine and an epoch timestamp.
 # ---------------------------------------------------------------------------
-def make_tabular_source(n: int = 4000, seed: int = 7) -> pd.DataFrame:
+def make_orders_source(n: int = 4000, seed: int = 7) -> pd.DataFrame:
+    """Tabular: order lines with a bounded ratio and a heavy-tailed counter."""
     rng = np.random.default_rng(seed)
-    region = rng.choice(["north", "south", "east", "west"], n, p=[0.4, 0.3, 0.2, 0.1])
     tier = rng.choice(["basic", "plus", "pro"], n, p=[0.6, 0.3, 0.1])
     base = {"basic": 20.0, "plus": 55.0, "pro": 140.0}
     amount = np.array([rng.lognormal(np.log(base[t]), 0.4) for t in tier])
+
+    # BOUNDED: quota_used can never exceed quota_total, and both endpoints carry
+    # real mass -- an untouched account reads 0, an exhausted one reads exactly
+    # the quota. Those are the rows logit cannot represent without help.
+    quota_total = rng.choice([100.0, 250.0, 500.0], n)
+    frac = rng.beta(5, 2, n)
+    frac[:120] = 1.0
+    frac[120:240] = 0.0
+
+    # HEAVY-TAILED: seven orders of magnitude, 60% exact zeros -- and the zeros
+    # are signal (no bytes moved), not missing data.
+    bytes_sent = np.where(rng.random(n) < 0.6, 0.0, rng.lognormal(11, 3.2, n).round())
+
+    # NULLS: a numeric column with gaps, to exercise a scalar fill.
+    discount = np.where(rng.random(n) < 0.15, np.nan, rng.uniform(0, 30, n).round(2))
+
     return pd.DataFrame(
         {
-            # D1 bait: near-unique identifier, should be dropped.
-            "order_id": [f"ORD-{i:07d}" for i in range(n)],
-            # D3 bait: constant, should be dropped.
-            "source_system": "billing",
-            "region": region,
+            "order_id": [f"ORD-{i:07d}" for i in range(n)],  # D1 bait: near-unique
+            "source_system": "billing",                      # D3 bait: constant
+            "region": rng.choice(["north", "south", "east", "west"], n,
+                                 p=[0.4, 0.3, 0.2, 0.1]),
             "tier": tier,
             "amount": np.round(amount, 2),
-            # Correlated with amount, so correlation_score has something to say.
-            "tax": np.round(amount * 0.08, 2),
+            "tax": np.round(amount * 0.08, 2),               # correlated with amount
             "items": rng.integers(1, 9, n),
-            "returned": rng.random(n) < 0.07,
+            "discount": discount,
+            "quota_total": quota_total,
+            "quota_used": (quota_total * frac).round(3),
+            "bytes_sent": bytes_sent,
         }
     )
 
 
-def make_timeseries_source(
-    sessions: int = 160, seed: int = 11
-) -> tuple[pd.DataFrame, dict]:
-    """Sessions walking a 4-state lifecycle, with a float-coded state column.
+def make_sessions_source(sessions: int = 160, seed: int = 11):
+    """Time-series: job sessions walking a sticky 4-state lifecycle.
 
-    The states are *sticky*: each one dwells for many rows before moving on.
-    That matters -- `detect_state_fields` requires a self-transition rate of at
-    least 0.95, because a lifecycle column that changes on most rows is not a
-    lifecycle, it is a churning categorical. A fixture that transitions every
-    step is detected as nothing at all.
+    The states dwell for many rows before moving on, which matters:
+    `detect_state_fields` requires a self-transition rate of at least 0.95,
+    because a column that changes on most rows is a churning attribute, not a
+    lifecycle, and is not detected however state-like it looks.
 
-    Returns the frame and the legal transition map it was generated from, so
-    the report card can be scored against ground truth rather than against
-    whatever the sample happened to show.
+    Returns the frame and the transition map it was generated from, so the
+    report card can be scored against ground truth rather than against whatever
+    the sample happened to show.
     """
     rng = np.random.default_rng(seed)
-    # 1 pending -> 2 active -> 3 done (sink), 2 -> 4 failed -> 2 retry.
     legal = {"1": ["1", "2"], "2": ["2", "3", "4"], "3": ["3"], "4": ["2", "4"]}
-    # Mean dwell in rows before leaving each state, and where it goes.
     dwell = {"1": 15, "2": 25, "4": 10}
     exits = {"1": (["2"], [1.0]), "2": (["3", "4"], [0.75, 0.25]), "4": (["2"], [1.0])}
+
     rows = []
     t0 = pd.Timestamp("2026-01-01", tz="UTC")
     for s in range(sessions):
         region = rng.choice(["north", "south", "east", "west"])
         tier = rng.choice(["basic", "plus", "pro"])
-        state = "1"
-        held = 0
-        depth = 0.0
-        for step in range(int(rng.integers(60, 91))):
+        state, held, written = "1", 0, 0.0
+        for i in range(int(rng.integers(60, 91))):
+            ts = t0 + pd.Timedelta(minutes=15 * i)
             rows.append(
                 {
-                    "customer": f"C{s:05d}",
-                    # Session-constant metadata.
+                    "job": f"J{s:05d}",
                     "region": region,
                     "tier": tier,
-                    "timestamp": t0 + pd.Timedelta(minutes=15 * step),
-                    # The trap: a state machine stored as a float.
+                    # EPOCH-NUMERIC timestamp: an int64, not a timestamp dtype.
+                    "event_time": int(ts.timestamp()),
+                    # FLOAT-CODED STATE MACHINE: trains as continuous and
+                    # generates 2.37 unless cast to a string first.
                     "status": float(state),
                     "latency_ms": float(rng.lognormal(3.2, 0.5)),
-                    "depth": depth,
+                    # GAPPY: a sensor that drops out, needing a directional fill.
+                    "queue_depth": (np.nan if rng.random() < 0.12
+                                    else float(rng.integers(0, 40))),
+                    # MONOTONE COUNTER: never decreases within a session.
+                    "bytes_written": written,
                 }
             )
-            depth += float(rng.integers(0, 4))
+            written += float(rng.integers(0, 5_000_000))
             held += 1
-            # "3" is absorbing; everything else leaves after its dwell.
             if state in dwell and held >= rng.poisson(dwell[state]):
                 targets, weights = exits[state]
                 state = str(rng.choice(targets, p=weights))
@@ -151,22 +200,20 @@ def make_timeseries_source(
     return pd.DataFrame(rows), legal
 
 
-def to_dataset(name: str, df: pd.DataFrame) -> "rf.dataset.LocalDataset":
-    # rf.Dataset(...) raises on purpose -- always go through a from_* factory.
-    return rf.Dataset.from_pandas(name, df)
-
-
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 def match_string_types(reference, target):
     """Cast `reference`'s string columns to `target`'s string type.
 
     `rf.Dataset.from_pandas` produces arrow `large_string`; generated data comes
     back from the backend as plain `string`. `tv_distance` compares the two as
     different types and returns 1.0 -- the WORST possible score -- with no error
-    and no warning. Measured on this script's own tabular run: region scored
-    1.0 across the type gap and 0.048 once matched, dragging the overall
-    marginal_dist_score from 0.32 to 0.62. ks_distance at least raises on a type
-    mismatch; the categorical path fails silently, so always match types before
-    scoring anything categorical.
+    and no warning. Measured on this script's own tabular run: one categorical
+    scored 1.0 across the type gap and 0.16 once matched, dragging the overall
+    marginal_dist_score from 0.32 to 0.62. `ks_distance` at least raises on a
+    type mismatch; the categorical path fails silently, so always match types
+    before scoring anything categorical.
     """
     table = reference.table
     for field in target.table.schema:
@@ -178,466 +225,538 @@ def match_string_types(reference, target):
     return rf.Dataset.from_table(reference.name(), table)
 
 
-# ---------------------------------------------------------------------------
-# 1. Profile + recommend -- offline
-# ---------------------------------------------------------------------------
-def example_profile_and_recommend() -> None:
-    print("\n=== 1. profile + recommend (offline) ===")
+def explain_routing(profile, config) -> None:
+    """Say why the recommender picked this model, and what would change it.
 
-    tab = make_tabular_source()
-    profile = profile_table(pa.Table.from_pandas(tab, preserve_index=False), name="orders")
-    cfg = recommend(profile)
-    print(f"  tabular   -> {cfg.decision} (rule {cfg.rule_fired})")
-    print(f"  dropped   -> {cfg.drop_columns}")
-    for note in cfg.notes:
-        print(f"             {note}")
-
-    check("tabular routes to a tabular model", cfg.decision.startswith("tab_"), cfg.decision)
-    check("near-unique id dropped (D1)", "order_id" in cfg.drop_columns)
-    check("constant column dropped (D3)", "source_system" in cfg.drop_columns)
-    check("a real measure survives", "amount" not in cfg.drop_columns)
-    check("no time roles on a tabular decision", cfg.session_column is None)
-
-    ts, legal = make_timeseries_source()
-    ts_profile = profile_table(pa.Table.from_pandas(ts, preserve_index=False), name="orders_ts")
-    # The session-key heuristic picks by cardinality and column position, so
-    # tell it what you know rather than hoping. Without the hint it may choose
-    # a metadata column and route the data as tabular.
-    ts_cfg = recommend(ts_profile, session_hints={"session_key": "customer"})
-    print(f"\n  timeseries -> {ts_cfg.decision} (rule {ts_cfg.rule_fired})")
-    print(f"  session    -> {ts_cfg.session_column}, timestamp -> {ts_cfg.timestamp_column}")
-    print(f"  metadata   -> {ts_cfg.metadata_columns}")
-    print(f"  archetype  -> {ts_cfg.session_archetype}")
-    print(f"  cast to categorical -> {ts_cfg.categorical_cast_columns}")
-
-    check("timeseries routes to a time model", ts_cfg.decision.startswith("time_"), ts_cfg.decision)
-    check("session hint honored", ts_cfg.session_column == "customer")
-    check("timestamp detected", ts_cfg.timestamp_column == "timestamp")
-    # ~25 rows per session over 160 sessions is R3 territory: >= 50 sessions
-    # with 4-500 rows each, which the recommender sends to the SSM family.
-    check("R3 fired for many short sessions", ts_cfg.rule_fired in ("R0", "R3"), ts_cfg.rule_fired)
-    # The float-coded state column is the reason to read this field: left
-    # alone it trains as continuous and the model generates 2.37.
-    check(
-        "float-coded state flagged for a VARCHAR cast",
-        "status" in ts_cfg.categorical_cast_columns,
-        str(ts_cfg.categorical_cast_columns),
-    )
-
-    found = detect_state_fields(
-        pa.Table.from_pandas(ts, preserve_index=False),
-        session_key="customer",
-        order_by="timestamp",
-    )
-    names = {c.field for c in found}
-    print(f"  state fields -> {sorted(names)}")
-    # A state field must be STICKY: detection needs a self-transition rate of
-    # at least 0.95. A categorical that changes on most rows is not detected.
-    check("status detected as a state field", "status" in names, str(sorted(names)))
-    for cand in found:
-        if cand.field != "status":
-            continue
-        print(f"  status: self_rate={cand.self_transition_rate:.3f} "
-              f"breadth={cand.transition_breadth} map={cand.transition_map}")
-        # The detector stringifies values, so a float-coded column yields
-        # '1.0', not '1'. Those strings are what the decode constraints and
-        # SamplingConfig.state_constraints must use.
-        ground_truth = {f"{k}.0": {f"{x}.0" for x in v} for k, v in legal.items()}
-        observed = {k: set(v) for k, v in cand.transition_map.items()}
-        # Subset, not equality: a sampled graph can miss rare legal edges, which
-        # is exactly why the profiler asks the user to confirm the map before
-        # it is enforced at decode time. What must never happen is the reverse.
-        check(
-            "no illegal edge was inferred",
-            all(observed[k] <= ground_truth.get(k, set()) for k in observed),
-            str(observed),
-        )
-
-
-# ---------------------------------------------------------------------------
-# 2. Report card -- offline
-# ---------------------------------------------------------------------------
-def degrade(df: pd.DataFrame, seed: int = 3) -> pd.DataFrame:
-    """A plausible-but-wrong synthetic frame: perfect marginals, no sequence.
-
-    Shuffling a column globally leaves its marginal distribution *exactly*
-    intact while destroying every within-session ordering property it had. A
-    per-field fidelity check scores this near 1.0. It is the failure mode the
-    TS score exists to catch.
+    Model choice is a pure function of measured properties, not a matter of
+    taste. Printing the measurement next to the rule makes the mapping
+    checkable against your own table.
     """
-    rng = np.random.default_rng(seed)
-    out = df.copy()
-    out["latency_ms"] = rng.permutation(out["latency_ms"].values)
-    out["status"] = rng.permutation(out["status"].values)
-    # The generator emits its own session key; the original high-cardinality
-    # key is not reproduced. Mirror that here.
-    out["session_key"] = pd.factorize(out["customer"])[0]
-    out = out.drop(columns=["customer"])
-    return out
-
-
-def example_report_card() -> None:
-    print("\n=== 2. report card (offline) ===")
-
-    real, legal = make_timeseries_source()
-    fake = degrade(real)
-
-    spec = CardSpec(
-        session_key="customer",
-        timestamp="timestamp",
-        # synth_session_key defaults to "session_key" -- the generator's key.
-        state_fields=[
-            StateFieldSpec(
-                "status",
-                legal_transitions={
-                    (f"{a}", f"{b}") for a, bs in legal.items() for b in bs
-                },
-            )
-        ],
-        metadata_columns=["region", "tier"],
+    numeric = sum(
+        1 for c in profile.columns
+        if c.kind == "numeric" and (c.distinct_count or 0) > 10
+        and c.name not in (config.session_column, config.timestamp_column)
+        and c.name not in config.drop_columns
     )
+    line = f"  measured  : {profile.row_count} rows, {numeric} continuous measurement(s)"
+    if config.session_column:
+        stats = profile.session_lengths.get(config.session_column)
+        if stats:
+            line += (f", {stats.sessions} sessions, avg length {stats.mean:.0f}"
+                     f", archetype {stats.archetype}")
+    print(line)
+    print(f"  decision  : {config.decision}   (rule {config.rule_fired})")
 
-    floor = noise_floor(real, spec)
-    card = score(real, fake, spec, name="shuffled")
-    print(card.summary(floor=floor))
+    why = {
+        "R0": "3+ continuous measurements -- a GAN models floats natively, where a "
+              "token model turns every distinct value into new vocabulary",
+        "R1": "very long sessions (avg > 500 rows) -- avoids the token budget a "
+              "sequence model would need",
+        "R2": "few sessions (< 50) -- not enough sequences for a token model to learn from",
+        "R3": "many sessions of moderate length -- the shape a state-space model "
+              "handles best, and the current premium default for session data",
+        "R4": "small or almost entirely numeric -- the GAN trains fastest and a token "
+              "model has little categorical structure to exploit",
+        "R5": "enough rows with real categorical structure -- the premium tabular default",
+    }.get(config.rule_fired)
+    if why:
+        print(f"  because   : {why}")
 
-    check("floor produced an RFScore", floor.scores["rfscore"] is not None)
-
-    # A global shuffle preserves marginals exactly, so the per-field view sees
-    # nothing wrong at all.
-    check(
-        "marginals survive the shuffle untouched",
-        card.scores["marginal"] > 0.99,
-        f"marginal {card.scores['marginal']:.4f}",
-    )
-    # ...and RFScore alone would clear the 0.85 training gate. This is the
-    # whole argument for scoring sequence structure separately: a table can be
-    # marginally perfect and temporally meaningless.
-    check(
-        "RFScore alone would pass the gate on broken data",
-        card.scores["rfscore"] >= card.scores["rfscore_gate"],
-        f"rfscore {card.scores['rfscore']:.4f} >= gate {card.scores['rfscore_gate']}",
-    )
-    check(
-        "the TS score catches what RFScore misses",
-        card.ts["ts_score"] < floor.ts["ts_score"],
-        f"ts {card.ts['ts_score']:.4f} vs floor {floor.ts['ts_score']:.4f}",
-    )
-    check(
-        "the broken dimension is the transition score",
-        card.ts["transition_score"] == min(
-            v for v in (card.ts["session_length_score"], card.ts["autocorr_score"],
-                        card.ts["transition_score"]) if v is not None
-        ),
-        f"transition {card.ts['transition_score']:.4f}",
-    )
-    check("gate is recorded on the card", card.scores["rfscore_gate"] == 0.85)
-    check(
-        "the generator session key was used",
-        card.guards["used_generator_session_key"] is True,
-    )
-    check(
-        "shuffled status produces illegal transitions",
-        any(sf["illegal_rate"] > 0 for sf in card.state_machine),
-        str([sf["illegal_rate"] for sf in card.state_machine]),
-    )
-    # Not every floor is above every synthetic score: the floor runs on half
-    # the sessions, so its own estimates are noisier. Compare dimension by
-    # dimension, and treat a synthetic score *above* the floor as a sign the
-    # dimension is uninformative rather than as a win.
-    # meta["not_compared"] is the field to read before believing any score:
-    # `customer` is absent from the synthetic frame by design, so it is not
-    # scored, and nothing else should be missing silently.
-    print(f"  not compared -> {card.meta['not_compared']}")
-    check("only the source session key is uncompared", card.meta["not_compared"] == ["customer"])
+    flip = {
+        "R0": "fewer than 3 continuous measurements makes this a session-shape decision",
+        "R1": "an average session length under 500 routes to time_ssm instead",
+        "R2": "50+ sessions routes to time_ssm instead",
+        "R3": "under 50 sessions, or an average length over 500, routes to time_gan instead",
+        "R4": "1000+ rows with categorical structure routes to tab_ssm instead",
+        "R5": "under 1000 rows, or no categorical columns, routes to tab_gan instead",
+    }.get(config.rule_fired)
+    if flip:
+        print(f"  would flip: {flip}")
 
 
-# ---------------------------------------------------------------------------
-# 3. Tabular train + generate -- needs a connection
-# ---------------------------------------------------------------------------
-async def example_tabular(conn) -> None:
-    print("\n=== 3. tabular train + generate (RF-Tab-GAN) ===")
+def train_action_for(decision: str, encoder, *, labels=None, relational=None):
+    """Map a recommender decision onto a configured train action.
 
-    df = make_tabular_source(n=4000)
-    # Drop what the profiler would drop; the model should never see an id.
-    df = df.drop(columns=["order_id", "source_system"])
-    dataset = to_dataset("orders", df)
-
-    categorical = ["region", "tier", "returned"]
-    continuous = [c for c in df.columns if c not in categorical]
-
-    train = ra.TrainTabGAN(
-        ra.TrainTabGAN.Config(
-            # tabular_gan is REQUIRED on TrainTabGAN.Config -- no default factory.
+    Written out rather than calling dataset_profiler.train_action() so the
+    reader can see which config shape belongs to which family: the GANs nest
+    under `doppelganger` / `tabular_gan`, while SSM and rtf2 share one flat
+    encoder / model / train / quality_check schema.
+    """
+    labels = labels or {}
+    if decision == "tab_gan":
+        return ra.TrainTabGAN(ra.TrainTabGAN.Config(
             tabular_gan=ra.TrainTabGAN.TrainConfig(epochs=10, batch_size=500),
-            encoder=ra.TrainTabGAN.DatasetConfig(
-                metadata=[
-                    ra.TrainTabGAN.FieldConfig(field=f, type="categorical")
-                    for f in categorical
-                ]
-                + [
-                    ra.TrainTabGAN.FieldConfig(field=f, type="continuous")
-                    for f in continuous
-                ],
-            ),
-            model_labels={"skill": "generate-from-data", "shape": "tabular"},
-        )
+            encoder=encoder, model_labels=labels))
+    if decision == "tab_ssm":
+        return ra.TrainTabSSM(ra.TrainTabSSM.Config(
+            encoder=encoder,
+            train=ra.TrainTabSSM.TrainConfig(epochs=5, batch_size=16),
+            model_labels=labels))
+    if decision in ("tab_rtf2", "tab_transformer"):
+        return ra.TrainTabTransformerV2(ra.TrainTabTransformerV2.Config(
+            encoder=encoder,
+            train=ra.TrainTabTransformerV2.TrainConfig(epochs=5, batch_size=16),
+            model_labels=labels))
+    if decision == "time_gan":
+        return ra.TrainTimeGAN(ra.TrainTimeGAN.Config(
+            encoder=encoder,
+            doppelganger=ra.TrainTimeGAN.DGConfig(epoch=20, batch_size=64, sample_len=1),
+            model_labels=labels))
+    if decision == "time_ssm":
+        return ra.TrainTimeSSM(ra.TrainTimeSSM.Config(
+            encoder=encoder,
+            train=ra.TrainTimeSSM.TrainConfig(epochs=3),
+            relational=relational or ra.TrainTimeSSM.RelationalConfig(),
+            model_labels=labels))
+    if decision in ("time_rtf2", "time_transformer"):
+        return ra.TrainTimeTransformerV2(ra.TrainTimeTransformerV2.Config(
+            encoder=encoder,
+            train=ra.TrainTimeTransformerV2.TrainConfig(epochs=3),
+            relational=relational or ra.TrainTimeTransformerV2.RelationalConfig(),
+            model_labels=labels))
+    raise ValueError(f"no train action wired for decision {decision!r}")
+
+
+def generate_action_for(decision: str):
+    """Generate action matching the trained family."""
+    if decision == "tab_gan":
+        return ra.GenerateTabGAN(ra.GenerateTabGAN.Config(
+            tabular_gan=ra.GenerateTabGAN.GenerateConfig(clip_in_range=True)))
+    if decision == "tab_ssm":
+        # GenerateTimeSSM lowers gen_batch to 32 by default; GenerateTabSSM does
+        # NOT -- it keeps the base 256. On a CPU worker (no CUDA kernels) the
+        # naive Mamba-2 path materialises a huge per-step intermediate at that
+        # batch size and generation does not finish. Observed: a 4000-row model
+        # sat in "Start generating samples..." for hours on a cpu worker set.
+        return ra.GenerateTabSSM(ra.GenerateTabSSM.Config(
+            sampling=ra.GenerateTabSSM.SamplingConfig(gen_batch=32)))
+    if decision in ("tab_rtf2", "tab_transformer"):
+        return ra.GenerateTabTransformerV2(ra.GenerateTabTransformerV2.Config())
+    if decision == "time_gan":
+        return ra.GenerateTimeGAN(ra.GenerateTimeGAN.Config(
+            doppelganger=ra.GenerateTimeGAN.DGConfig()))
+    if decision == "time_ssm":
+        return ra.GenerateTimeSSM(ra.GenerateTimeSSM.Config())
+    if decision in ("time_rtf2", "time_transformer"):
+        return ra.GenerateTimeTransformerV2(ra.GenerateTimeTransformerV2.Config())
+    raise ValueError(f"no generate action wired for decision {decision!r}")
+
+
+def field_configs(action_cls, names, kind):
+    return [action_cls.FieldConfig(field=n, type=kind) for n in names]
+
+
+# ---------------------------------------------------------------------------
+# Example 1 -- tabular: bounded ratio + heavy-tailed counter
+# ---------------------------------------------------------------------------
+# Forward: ratio -> logit, plus a bucket column recording which rows sat exactly
+# on an endpoint. The clamp keeps logit finite; the bucket is what lets the
+# inverse put the endpoints back, because sigmoid never reaches 0 or 1.
+ORDERS_ENCODE_SQL = f"""
+    SELECT region, tier, amount, tax, items, "quota_total", bytes_sent,
+           COALESCE(discount, 0.0) AS discount,
+           ln(ratio / (1 - ratio))  AS quota_logit,
+           bucket                   AS quota_bucket
+    FROM (
+      SELECT *,
+             least(greatest("quota_used" / "quota_total", {EPS}), 1 - {EPS}) AS ratio,
+             CASE WHEN "quota_used" <= 0               THEN 'zero'
+                  WHEN "quota_used" >= "quota_total"   THEN 'one'
+                  ELSE 'interior' END                  AS bucket
+      FROM my_table
     )
+"""
 
+# Inverse: quota_total * sigmoid(z) for the interior, the recorded endpoint
+# otherwise. The bound holds for any value the model could possibly emit.
+ORDERS_DECODE_SQL = """
+    SELECT region, tier, amount, tax, items, discount, "quota_total", bytes_sent,
+           CASE WHEN quota_bucket = 'zero' THEN 0.0
+                WHEN quota_bucket = 'one'  THEN "quota_total"
+                ELSE "quota_total" / (1 + exp(-quota_logit)) END AS "quota_used"
+    FROM my_table
+"""
+
+
+def _collapse(series: pd.Series, threshold: float = 0.01) -> float:
+    """Share of min-max normalised values under `threshold`."""
+    lo, hi = float(series.min()), float(series.max())
+    if hi == lo:
+        return 1.0
+    return float((((series - lo) / (hi - lo)) < threshold).mean())
+
+
+async def example_tabular(conn) -> None:
+    print("\n=== 1. tabular: orders ===")
+    raw = make_orders_source()
+
+    # ---- step 1: analyze -------------------------------------------------
+    step(1, "analyze")
+    profile = profile_table(pa.Table.from_pandas(raw, preserve_index=False), name="orders")
+    config = recommend(profile)
+    explain_routing(profile, config)
+    print(f"  dropped   : {config.drop_columns}")
+    for note in config.notes:
+        print(f"              {note}")
+    check("near-unique id dropped (D1)", "order_id" in config.drop_columns)
+    check("constant column dropped (D3)", "source_system" in config.drop_columns)
+    check("recommender produced a trainable decision", config.decision != "refuse",
+          config.refusal_reason or config.decision)
+
+    # Bounded and heavy-tailed columns are NOT auto-detected -- this is the
+    # judgement the profiler cannot make for you, and the reason to look at the
+    # data before preparing it.
+    collapse_before = _collapse(raw["bytes_sent"])
+    print(f"  bytes_sent: {collapse_before:.2%} of values below 0.01 once normalised"
+          f" -- a model would see almost all of them as the same number")
+    print("  quota_used is bounded by quota_total; both endpoints carry real mass")
+
+    # ---- step 2: set the target -----------------------------------------
+    step(2, "set the target")
+    # A tabular frame has no session key, so there is no report card and no
+    # noise floor. The target is stated in terms of what a tabular run can be
+    # judged on: marginal fidelity, and the constraint holding exactly.
+    categorical = ["region", "tier", "quota_bucket"]
+    print("  target    : marginal fidelity on all fields, and ZERO quota_used >"
+          " quota_total rows -- the bound is structural, not statistical")
+
+    # ---- step 3: prepare -------------------------------------------------
+    step(3, "prepare")
+    # One SQL projection does the drops, the scalar fill and the logit
+    # transform; LogEncode applies log1p to the heavy-tailed counter.
+    prep = rf.WorkflowBuilder()
+    prep.add_path(
+        to_dataset("orders", raw),
+        ra.SQL(query=ORDERS_ENCODE_SQL),
+        ra.LogEncode(field="bytes_sent"),      # log1p, NOT log: keeps the zeros
+        ra.DatasetSave(name="orders-prepared"),
+    )
+    wf = await run(conn, prep, "prepare")
+    prepared = await wf.datasets().concat(conn)
+    prep_df = prepared.to_pandas()
+
+    check("logit is finite for every row", bool(np.isfinite(prep_df["quota_logit"]).all()),
+          "the clamp is what prevents +/-inf at the endpoints")
+    check("endpoint buckets were recorded",
+          {"zero", "one"} <= set(prep_df["quota_bucket"].unique()),
+          str(prep_df["quota_bucket"].value_counts().to_dict()))
+    collapse_after = _collapse(prep_df["bytes_sent"])
+    check("log1p restored resolution", collapse_after < collapse_before / 10,
+          f"{collapse_before:.2%} -> {collapse_after:.2%} below 0.01")
+    check("scalar fill removed the nulls", int(prep_df["discount"].isna().sum()) == 0)
+
+    # ---- step 4: train ---------------------------------------------------
+    step(4, "train")
+    # Re-profile the PREPARED table: the encoder has to describe the columns the
+    # trainer will actually see, which are not the columns we started with.
+    prep_profile = profile_table(prepared.table, name="orders-prepared")
+    prep_config = recommend(prep_profile)
+    explain_routing(prep_profile, prep_config)
+
+    continuous = [c for c in prep_df.columns if c not in categorical]
+    action_cls = {"tab_gan": ra.TrainTabGAN, "tab_ssm": ra.TrainTabSSM}.get(
+        prep_config.decision, ra.TrainTabTransformerV2)
+    encoder = action_cls.DatasetConfig(
+        metadata=(field_configs(action_cls, categorical, "categorical")
+                  + field_configs(action_cls, continuous, "continuous")))
+    train = train_action_for(prep_config.decision, encoder,
+                             labels={"skill": "generate-from-data", "example": "tabular"})
     builder = rf.WorkflowBuilder()
-    builder.add_dataset(dataset)
-    builder.add_action(train, parents=[dataset])
-    workflow = await builder.start(conn)
-    print(f"  train workflow: {workflow.id()}")
-    await workflow.wait(raise_on_failure=True)
-
-    model = await workflow.models().last()
-    print(f"  model: {model.id}")
+    builder.add_dataset(prepared)
+    builder.add_action(train, parents=[prepared])
+    wf = await run(conn, builder, "train")
+    model = await wf.models().last()
     check("training produced a model", model is not None)
 
-    generate = ra.GenerateTabGAN(
-        ra.GenerateTabGAN.Config(
-            tabular_gan=ra.GenerateTabGAN.GenerateConfig(clip_in_range=True)
-        )
-    )
-    target = ra.SessionTarget(target=4000)
-    save = ra.DatasetSave(name="orders-synthetic")
-
+    # ---- step 5: generate ------------------------------------------------
+    step(5, "generate")
+    generate = generate_action_for(prep_config.decision)
+    target = ra.SessionTarget(target=len(raw))
     builder = rf.WorkflowBuilder()
     builder.add_model(model)
     # The two edges between generate and target are the feedback loop: target
-    # counts what arrived and asks generate for the shortfall. Without the
-    # second edge generation runs once and stops at the default cap.
+    # counts what arrived and asks generate for the shortfall.
     builder.add_action(generate, parents=[model, target])
     builder.add_action(target, parents=[generate])
-    builder.add_action(save, parents=[generate])
-    workflow = await builder.start(conn)
-    print(f"  generate workflow: {workflow.id()}")
-    await workflow.wait(raise_on_failure=True)
+    builder.add_action(ra.DatasetSave(name="orders-synthetic-encoded"), parents=[generate])
+    wf = await run(conn, builder, "generate")
+    syn_encoded = await wf.datasets().concat(conn)
+    print(f"  generated {syn_encoded.table.num_rows} rows in transformed space")
 
-    syn = await workflow.datasets().concat(conn)
-    print(f"  generated {syn.table.num_rows} rows")
-
-    check("schema is preserved", set(syn.table.column_names) >= set(df.columns),
-          str(sorted(set(df.columns) - set(syn.table.column_names))))
-    check("SessionTarget reached the requested volume", syn.table.num_rows >= 4000,
-          str(syn.table.num_rows))
-
-    syn_df = syn.to_pandas()
-    lo, hi = df["amount"].min(), df["amount"].max()
-    check("clip_in_range kept amount in the training range",
-          bool((syn_df["amount"] >= lo).all() and (syn_df["amount"] <= hi).all()))
-
-    # A tabular dataset has no session key, so the report card does not apply.
-    # marginal_dist_score is the tabular-shaped fidelity number.
-    #
-    # Two things have to be right before the number means anything:
-    #
-    # 1. Arrow string types must match on both sides, or tv_distance returns 1.0
-    #    silently. See match_string_types.
-    # 2. other_categorical is not optional. Left to itself, marginal_dist_score
-    #    classifies fields by dtype and sends anything non-string to
-    #    ks_distance -- which rejects booleans outright ("must be either numeric
-    #    or temporal"). Any bool column, and any numeric column you encoded as
-    #    categorical, has to be named here or the whole score raises.
-    matched = match_string_types(dataset, syn)
-
-    raw_tv = rl.metrics.tv_distance(dataset, syn, "region")
-    tv = rl.metrics.tv_distance(matched, syn, "region")
-    print(f"  tv_distance(region): {raw_tv:.4f} unmatched -> {tv:.4f} matched")
-    check(
-        "matching string types changes the categorical distance",
-        tv < raw_tv or raw_tv < 1.0,
-        f"unmatched {raw_tv:.4f}, matched {tv:.4f}",
+    # Undo the transforms, in the reverse order they were applied.
+    post = rf.WorkflowBuilder()
+    post.add_path(
+        syn_encoded,
+        ra.LogDecode(field="bytes_sent"),       # expm1, casts back to the source dtype
+        ra.SQL(query=ORDERS_DECODE_SQL),
+        ra.DatasetSave(name="orders-synthetic"),
     )
-    # Coverage is type-agnostic, so it is the cross-check that tells you a 1.0
-    # tv_distance was an artifact rather than a genuine total mismatch.
-    #
-    # category_coverage carries a bare `assert` that the synthetic column has no
-    # MORE distinct values than the real one. A generator emitting an unseen
-    # category is a finding, not a reason to abort the run -- and because it is
-    # an assert it vanishes under `python -O`, so the same input either raises
-    # or silently divides by a wrong denominator depending on how you launched.
-    try:
-        coverage = rl.metrics.category_coverage(dataset, syn, "region")
-        check("every real category appears in the synthetic data",
-              coverage == 1.0, f"{coverage:.4f}")
-    except AssertionError:
-        check("every real category appears in the synthetic data", False,
-              "synthetic emitted categories absent from the real data")
+    wf = await run(conn, post, "decode")
+    syn = await wf.datasets().concat(conn)
+    syn_df = syn.to_pandas()
 
-    fidelity = rl.metrics.marginal_dist_score(matched, syn, other_categorical=categorical)
+    # ---- step 6: evaluate ------------------------------------------------
+    step(6, "evaluate")
+    violations = int(((syn_df["quota_used"] < 0)
+                      | (syn_df["quota_used"] > syn_df["quota_total"])).sum())
+    check("quota_used <= quota_total holds by construction", violations == 0,
+          f"{violations} of {len(syn_df)} rows -- sigmoid cannot leave (0, 1)")
+    check("bytes_sent came back on the original scale", syn_df["bytes_sent"].max() > 1e6,
+          f"max {syn_df['bytes_sent'].max():.0f}")
+
+    # Match arrow string types first, or tv_distance silently returns 1.0.
+    real_for_scoring = match_string_types(
+        to_dataset("orders", raw[[c for c in raw.columns if c in syn_df.columns]]), syn)
+    shared_cat = [c for c in ("region", "tier") if c in syn_df.columns]
+    fidelity = rl.metrics.marginal_dist_score(real_for_scoring, syn,
+                                              other_categorical=shared_cat)
     print(f"  marginal fidelity: {fidelity:.4f}")
     check("marginal fidelity is a real score", 0.0 <= fidelity <= 1.0, f"{fidelity:.4f}")
-    for field in ("amount", "tax"):
-        print(f"  ks_distance({field}) = {rl.metrics.ks_distance(matched, syn, field):.4f}")
-    for field in ("region", "tier"):
-        print(f"  tv_distance({field}) = {rl.metrics.tv_distance(matched, syn, field):.4f}")
-    # 10 epochs of CTGAN on 4k rows is a smoke test, not a fidelity result --
-    # expect a mediocre score here and do not read anything into it.
+    for f in shared_cat:
+        print(f"  tv_distance({f}) = {rl.metrics.tv_distance(real_for_scoring, syn, f):.4f}")
+    print("  (small epoch counts: treat these as a pipeline smoke test, not fidelity)")
 
 
 # ---------------------------------------------------------------------------
-# 4. Time-series train + generate -- needs a connection
+# Example 2 -- time-series: epoch timestamp, state machine, counter, gaps
 # ---------------------------------------------------------------------------
+# Epoch seconds -> a real timestamp; the float state -> VARCHAR so it encodes as
+# a state and not as a number; the counter -> its per-step increment, in log1p
+# space, because the level is unbounded and monotone while the delta is neither.
+SESSIONS_ENCODE_SQL = """
+    SELECT job, region, tier,
+           to_timestamp_seconds(CAST("event_time" AS BIGINT)) AS ts,
+           CAST(CAST("status" AS INT) AS VARCHAR)             AS status,
+           latency_ms, queue_depth,
+           ln(1 + GREATEST("bytes_written"
+               - LAG("bytes_written", 1, 0.0) OVER (
+                   PARTITION BY job ORDER BY "event_time"), 0.0)) AS bytes_delta
+    FROM my_table
+"""
+
+
 async def example_timeseries(conn) -> None:
-    print("\n=== 4. time-series train + generate (RF-Time-GAN) ===")
+    print("\n=== 2. time-series: job sessions ===")
+    raw, legal = make_sessions_source()
 
-    df, legal = make_timeseries_source(sessions=160)
-    # The state column is a float in the source; cast it before training or it
-    # trains as continuous and the model generates values like 2.37.
-    df["status"] = df["status"].astype(int).astype(str)
-    dataset = to_dataset("orders-ts", df)
+    # ---- step 1: analyze -------------------------------------------------
+    step(1, "analyze")
+    profile = profile_table(pa.Table.from_pandas(raw, preserve_index=False), name="jobs")
+    # The session-key heuristic picks by cardinality and column position, so
+    # tell it what you know rather than hoping.
+    config = recommend(profile, session_hints={"session_key": "job"})
+    explain_routing(profile, config)
+    print(f"  timestamp : {config.timestamp_column}  (prep: {config.timestamp_prep})")
+    print(f"  cast      : {config.categorical_cast_columns}")
+    print(f"  dropped   : {config.drop_columns}")
+    for note in config.notes:
+        print(f"              {note}")
+    # The recommender is a starting point, not an oracle. D1 drops columns that
+    # are >95% distinct as identifiers -- but a float sensor reading is
+    # near-unique BY NATURE, so latency_ms and the bytes_written counter get
+    # caught by a rule meant for IDs. We keep them: the prepare step below
+    # selects columns explicitly rather than applying config.drop_columns.
+    # Worth knowing that this also moved the routing: those two columns are
+    # what the continuous-measurement count is made of, so dropping them is
+    # part of why R3 fired instead of R0.
+    caught = [c for c in ("latency_ms", "bytes_written") if c in config.drop_columns]
+    if caught:
+        print(f"  KEEPING   : {caught} -- near-unique floats are measurements, not IDs")
+    check("session hint honored", config.session_column == "job")
+    check("float-coded state flagged for a VARCHAR cast",
+          "status" in config.categorical_cast_columns,
+          str(config.categorical_cast_columns))
 
-    train = ra.TrainTimeGAN(
-        ra.TrainTimeGAN.Config(
-            encoder=ra.TrainTimeGAN.DatasetConfig(
-                timestamp=ra.TrainTimeGAN.TimestampConfig(field="timestamp"),
-                metadata=[
-                    # "session" marks a high-cardinality key whose values are
-                    # not learned -- only its role as a session boundary.
-                    ra.TrainTimeGAN.FieldConfig(field="customer", type="session"),
-                    ra.TrainTimeGAN.FieldConfig(field="region", type="categorical"),
-                    ra.TrainTimeGAN.FieldConfig(field="tier", type="categorical"),
-                ],
-                measurements=[
-                    ra.TrainTimeGAN.FieldConfig(field="status", type="categorical"),
-                    ra.TrainTimeGAN.FieldConfig(field="latency_ms", type="continuous"),
-                    ra.TrainTimeGAN.FieldConfig(field="depth", type="continuous"),
-                ],
-            ),
-            doppelganger=ra.TrainTimeGAN.DGConfig(
-                epoch=20,
-                # batch_size must stay below the number of sessions.
-                batch_size=64,
-                # Rule of thumb: avg_session_len / 50, floored at 1.
-                sample_len=1,
-            ),
-            model_labels={"skill": "generate-from-data", "shape": "timeseries"},
-        )
+    found = detect_state_fields(pa.Table.from_pandas(raw, preserve_index=False),
+                                session_key="job", order_by="event_time")
+    names = {c.field for c in found}
+    check("status detected as a state field", "status" in names, str(sorted(names)))
+    # NOTE the values here are '1.0'/'2.0' -- the raw float column stringified.
+    # They are NOT what the encoder will see after step 3 casts to VARCHAR of
+    # the int, so the real constraint map is derived there, not here.
+    print(f"  transitions (pre-cast): {decode_constraints(found).get('status')}")
+
+    # ---- step 2: set the target -----------------------------------------
+    step(2, "set the target")
+    prepared_real = _prepare_sessions_locally(raw)
+    spec = CardSpec(
+        session_key="job",
+        timestamp="ts",
+        state_fields=[StateFieldSpec(
+            "status", legal_transitions={(a, b) for a, bs in legal.items() for b in bs})],
+        metadata_columns=["region", "tier"],
+        counters=["bytes_delta"],
     )
+    floor = noise_floor(prepared_real, spec)
+    print(floor.summary())
+    print(f"  target    : beat nothing below the floor -- RFScore {floor.scores['rfscore']:.4f},"
+          f" TS {floor.ts['ts_score']:.4f}. Gate {floor.scores['rfscore_gate']}.")
+    check("noise floor produced a score", floor.scores["rfscore"] is not None)
 
+    # ---- step 3: prepare -------------------------------------------------
+    step(3, "prepare")
+    # One SQL projection: epoch -> timestamp, float state -> VARCHAR, counter ->
+    # log1p of its per-step increment. Then the directional fill PAIR for the
+    # gappy sensor -- forward alone cannot fill a leading null run, and the
+    # survivor reaches the encoder as NaT, which is not in the vocabulary.
+    from rockfish.actions.apply_transform import Field, FillNullBackward, FillNullForward
+
+    prep = rf.WorkflowBuilder()
+    prep.add_path(
+        to_dataset("jobs", raw),
+        ra.SQL(query=SESSIONS_ENCODE_SQL),
+        ra.Transform(ra.Transform.Config(function=FillNullForward(Field("queue_depth")))),
+        ra.Transform(ra.Transform.Config(function=FillNullBackward(Field("queue_depth")))),
+        ra.DatasetSave(name="jobs-prepared"),
+    )
+    wf = await run(conn, prep, "prepare")
+    prepared = await wf.datasets().concat(conn)
+    prep_df = prepared.to_pandas()
+
+    check("epoch seconds became a real timestamp",
+          str(prepared.table.schema.field("ts").type).startswith("timestamp"),
+          str(prepared.table.schema.field("ts").type))
+    check("state column is now categorical (string)",
+          pa.types.is_string(prepared.table.schema.field("status").type)
+          or pa.types.is_large_string(prepared.table.schema.field("status").type))
+    check("directional fill pair removed every gap",
+          int(prep_df["queue_depth"].isna().sum()) == 0)
+    check("counter became a non-negative increment",
+          bool((prep_df["bytes_delta"] >= 0).all()),
+          "the level is monotone; the delta is what the model should learn")
+
+    # Decode constraints must use the POST-CAST values. Derived from the raw
+    # float column they would read '1.0'/'2.0'; the encoder sees '1'/'2', and a
+    # key that does not match is silently ignored rather than raising -- the
+    # mask then covers nothing and the model transitions freely.
+    prepared_states = detect_state_fields(prepared.table, session_key="job", order_by="ts")
+    constraints = decode_constraints([c for c in prepared_states if c.field == "status"])
+    print(f"  transitions (post-cast): {constraints.get('status')}")
+    check("constraint keys match the values the encoder will see",
+          set(constraints.get("status", {})) == set(prep_df["status"].astype(str).unique()),
+          f"{sorted(constraints.get('status', {}))} vs "
+          f"{sorted(prep_df['status'].astype(str).unique())}")
+
+    # ---- step 4: train ---------------------------------------------------
+    step(4, "train")
+    prep_profile = profile_table(prepared.table, name="jobs-prepared")
+    prep_config = recommend(prep_profile, session_hints={"session_key": "job"})
+    explain_routing(prep_profile, prep_config)
+
+    action_cls = {"time_gan": ra.TrainTimeGAN, "time_ssm": ra.TrainTimeSSM}.get(
+        prep_config.decision, ra.TrainTimeTransformerV2)
+    session_type = "session" if prep_config.decision == "time_gan" else "categorical"
+    encoder = action_cls.DatasetConfig(
+        timestamp=action_cls.TimestampConfig(field="ts"),
+        metadata=[action_cls.FieldConfig(field="job", type=session_type),
+                  action_cls.FieldConfig(field="region", type="categorical"),
+                  action_cls.FieldConfig(field="tier", type="categorical")],
+        measurements=[action_cls.FieldConfig(field="status", type="categorical"),
+                      action_cls.FieldConfig(field="latency_ms", type="continuous"),
+                      action_cls.FieldConfig(field="queue_depth", type="continuous"),
+                      action_cls.FieldConfig(field="bytes_delta", type="continuous")],
+    )
+    train = train_action_for(prep_config.decision, encoder,
+                             labels={"skill": "generate-from-data", "example": "timeseries"})
     builder = rf.WorkflowBuilder()
-    builder.add_dataset(dataset)
-    builder.add_action(train, parents=[dataset])
-    workflow = await builder.start(conn)
-    print(f"  train workflow: {workflow.id()}")
-    await workflow.wait(raise_on_failure=True)
-
-    model = await workflow.models().last()
+    builder.add_dataset(prepared)
+    builder.add_action(train, parents=[prepared])
+    wf = await run(conn, builder, "train")
+    model = await wf.models().last()
     check("training produced a model", model is not None)
 
-    generate = ra.GenerateTimeGAN(
-        ra.GenerateTimeGAN.Config(doppelganger=ra.GenerateTimeGAN.DGConfig())
-    )
-    target = ra.SessionTarget(target=160)
-    save = ra.DatasetSave(name="orders-ts-synthetic")
+    # ---- step 5: generate ------------------------------------------------
+    step(5, "generate")
+    generate = generate_action_for(prep_config.decision)
+    # The SSM time path is the only one that honours decode constraints and an
+    # explicit generation-order column; set them only where they take effect.
+    if prep_config.decision == "time_ssm":
+        generate.config().sampling.state_constraints = constraints
+        generate.config().sampling.sequence_index_column = "seq"
+        print("  SSM path: state_constraints + sequence_index_column enabled")
 
+    target = ra.SessionTarget(target=raw["job"].nunique())
     builder = rf.WorkflowBuilder()
     builder.add_model(model)
     builder.add_action(generate, parents=[model, target])
     builder.add_action(target, parents=[generate])
-    builder.add_action(save, parents=[generate])
-    workflow = await builder.start(conn)
-    print(f"  generate workflow: {workflow.id()}")
-    await workflow.wait(raise_on_failure=True)
-
-    syn = await workflow.datasets().concat(conn)
+    builder.add_action(ra.DatasetSave(name="jobs-synthetic"), parents=[generate])
+    wf = await run(conn, builder, "generate")
+    syn = await wf.datasets().concat(conn)
     syn_df = syn.to_pandas()
-    print(f"  generated {syn.table.num_rows} rows")
+    print(f"  generated {len(syn_df)} rows")
 
-    # The generator emits its own session key. The original `customer` values
-    # are NOT reproduced -- that is what type="session" means.
+    # ---- step 6: evaluate ------------------------------------------------
+    step(6, "evaluate")
+    # The generator emits its own session key; the original `job` values are not
+    # reproduced. Report card groups by it via CardSpec.synth_session_key.
     check("synthetic output carries session_key", "session_key" in syn_df.columns,
           str(sorted(syn_df.columns)))
-    n_syn_sessions = syn_df["session_key"].nunique()
-    print(f"  sessions: {n_syn_sessions}")
-    check("SessionTarget reached the session count", n_syn_sessions >= 160, str(n_syn_sessions))
+    if "seq" in syn_df.columns:
+        spec.sequence_index = "seq"
 
-    # Session metrics need table metadata on BOTH sides, and the two sides use
-    # different fields: real session columns vs the generator's key.
-    src = dataset.with_table_metadata(rf.TableMetadata(metadata=["customer", "region", "tier"]))
-    syn_md = syn.with_table_metadata(rf.TableMetadata(metadata=["session_key"]))
-
-    len_ks = rl.metrics.ks_distance(
-        rf.metrics.session_length(src), rf.metrics.session_length(syn_md), "session_length"
-    )
-    ia_ks = rl.metrics.ks_distance(
-        rf.metrics.interarrivals(src, "timestamp"),
-        rf.metrics.interarrivals(syn_md, "timestamp"),
-        "interarrival",
-    )
-    print(f"  session_length KS: {len_ks:.4f}   interarrival KS: {ia_ks:.4f}")
-    check("session length KS is in range", 0.0 <= len_ks <= 1.0)
-
-    spec = CardSpec(
-        session_key="customer",
-        timestamp="timestamp",
-        state_fields=[
-            StateFieldSpec(
-                "status",
-                legal_transitions={(a, b) for a, bs in legal.items() for b in bs},
-            )
-        ],
-        metadata_columns=["region", "tier"],
-    )
-    floor = noise_floor(df, spec)
-    card = score(df, syn_df, spec, name="timegan")
+    card = score(prepared_real, syn_df, spec, name="run1")
     print(card.summary(floor=floor))
-    card.to_json("timegan-card.json")
-
+    card.to_json("timeseries-card.json")
     check("card scored something", card.scores["rfscore"] is not None)
     check("card grouped synthetic rows by the generator key",
           card.guards["used_generator_session_key"] is True)
-    # Judge against the floor, never against 1.0.
-    print(f"  RFScore {card.scores['rfscore']:.4f} vs floor {floor.scores['rfscore']:.4f} "
-          f"(gate {card.scores['rfscore_gate']})")
+    # With decode constraints correctly applied this holds BY CONSTRUCTION --
+    # an illegal transition is unsampleable, whatever the training quality. A
+    # high rate here means the constraint keys did not match, not that the
+    # model trained badly.
+    if prep_config.decision == "time_ssm" and card.state_machine:
+        illegal = max(sf["illegal_rate"] for sf in card.state_machine)
+        check("decode constraints made illegal transitions unsampleable", illegal < 0.02,
+              f"illegal rate {illegal} -- if high, check the constraint keys match "
+              f"the post-cast encoder values")
+    print(f"  not compared: {card.meta['not_compared']}"
+          "   <- read this before believing any score")
+    print("  (small epoch counts: treat these as a pipeline smoke test, not fidelity)")
+
+
+def _prepare_sessions_locally(raw: pd.DataFrame) -> pd.DataFrame:
+    """The same preparation as step 3, in pandas, for the pre-training floor.
+
+    The floor has to be measured on the shape the model will produce, and step 3
+    has not run yet at that point in the loop.
+    """
+    df = raw.sort_values(["job", "event_time"], kind="stable").copy()
+    df["ts"] = pd.to_datetime(df["event_time"], unit="s", utc=True)
+    df["status"] = df["status"].astype(int).astype(str)
+    df["queue_depth"] = (df.groupby("job")["queue_depth"].ffill()
+                         .groupby(df["job"]).bfill())
+    delta = df.groupby("job")["bytes_written"].diff().fillna(0.0).clip(lower=0.0)
+    df["bytes_delta"] = np.log1p(delta)
+    return df[["job", "region", "tier", "ts", "status",
+               "latency_ms", "queue_depth", "bytes_delta"]]
 
 
 # ---------------------------------------------------------------------------
 
-EXAMPLES = {1: "profile+recommend", 2: "report card", 3: "tabular", 4: "timeseries"}
-OFFLINE = {1, 2}
+EXAMPLES = {1: "tabular", 2: "timeseries"}
 
 
 async def main(selected: list[int], connection_mode: str) -> None:
-    if 1 in selected:
-        example_profile_and_recommend()
-    if 2 in selected:
-        example_report_card()
-
-    online = [n for n in selected if n not in OFFLINE]
-    if not online:
-        return
-
     async with connect(connection_mode) as conn:
-        if 3 in online:
+        if 1 in selected:
             await example_tabular(conn)
-        if 4 in online:
+        if 2 in selected:
             await example_timeseries(conn)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "-e", "--example",
-        type=int,
-        action="append",
-        choices=sorted(EXAMPLES),
-        help="Run a specific example (1-4). Repeatable. Default: run all four. "
-             "Examples 1-2 are offline; 3-4 train real models.",
-    )
-    parser.add_argument(
-        "--connection",
-        choices=("auto", "config", "env"),
-        default="auto",
-        help="Credential source: 'config' for ~/.config/rockfish/config.toml, "
-             "'env' for ROCKFISH_* variables, 'auto' (default) to prefer env "
-             "when ROCKFISH_API_KEY is set.",
-    )
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-e", "--example", type=int, action="append",
+                        choices=sorted(EXAMPLES),
+                        help="Run one example (1=tabular, 2=timeseries). Repeatable. "
+                             "Default: both. Both train real models on a backend.")
+    parser.add_argument("--connection", choices=("auto", "config", "env"), default="auto",
+                        help="Credential source: 'config' for "
+                             "~/.config/rockfish/config.toml, 'env' for ROCKFISH_* "
+                             "variables, 'auto' (default) to prefer env when "
+                             "ROCKFISH_API_KEY is set.")
     return parser.parse_args()
 
 
