@@ -300,7 +300,7 @@ A chunk's training sequence is `[SS, parent, EOS, CHUNK_BREAK, memory rows, BOS,
 
 | Field | Default | Notes |
 | --- | --- | --- |
-| `gen_batch` | `256`, but `32` for `GenerateTimeSSM` | **`GenerateTabSSM` does not get the lower default** and keeps 256. Mamba-2 without the CUDA kernels materialises a large per-step intermediate, so a tabular SSM generate at 256 is punishingly slow on a CPU worker: measured at **2h38m** to emit 4,000 records from a 4,000-row model, in a single pass with 100% structural validity, on a worker that logged `CUDA not available`. It completes — it is not a hang — but set `gen_batch=32` for tabular SSM, or make sure the job lands on a GPU worker set |
+| `gen_batch` | `256`, but `32` for `GenerateTimeSSM` | **`GenerateTabSSM` does not get the lower default** and keeps 256. Mamba-2 without the CUDA kernels materialises a large per-step intermediate, which is why the time variant lowers it. Set `gen_batch=32` for tabular SSM too, or make sure the job lands on a GPU worker set. One observed run on a shared CPU worker took 2h38m for 4,000 records (completing normally, 100% structural validity) — a single data point with contention uncontrolled, so treat it as a reason to set the knob, not as a figure to plan against |
 | `top_k` | `None` | |
 | `top_p` | `None` | |
 | `temperature` | `1.0` | |
