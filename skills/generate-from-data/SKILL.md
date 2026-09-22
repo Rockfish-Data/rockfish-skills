@@ -132,7 +132,7 @@ Pick the model first. `recommend()` decides this from the data's shape; the same
 
 **1** is what `recommend()` picks for that shape — start there. **2** is the next one to try if the report card disappoints. **✓** means rtf2 will train on that shape, but `recommend()` never selects it: reach for it deliberately when you want an attention model, not as the next step in an iteration.
 
-The 1/2 ordering is Rockfish's own position, not a benchmark: the recommender treats **SSM as the first-choice family and the GANs as a fallback** (`prefer_ssm` overrides any GAN routing with the note *"SSM first, GAN as fallback"*), while the default rules still send a few shapes to a GAN — continuous-heavy time series most of all, since a GAN models floats natively where a token model turns each distinct value into new vocabulary. There is no published fidelity comparison between these families, so past the first choice, iterate by measuring: run step 6, and let the floor and the card decide.
+The 1/2 ordering is from the recommender: the recommender treats **SSM as the first-choice family and the GANs as a fallback** (`prefer_ssm` overrides any GAN routing with the note *"SSM first, GAN as fallback"*), while the default rules still send a few shapes to a GAN — continuous-heavy time series most of all, since a GAN models floats natively where a token model turns each distinct value into new vocabulary. There is no published fidelity comparison between these families, so past the first choice, iterate by measuring: run step 6, and let the floor and the card decide.
 
 Full routing rules, the reasoning per shape, and the config and hyperparameters for every family: [`reference/models.md`](reference/models.md).
 
@@ -166,7 +166,7 @@ model = await workflow.models().last()
 
 Field `type` is `"categorical"`, `"continuous"`, or `"ignore"`; RF-Time-GAN adds `"session"` for the session key. An unspecified type defaults to `"continuous"`.
 
-**Label every model with the iteration it belongs to.** `model_labels` is what makes turn 3 of the loop findable a week later; without it the Model Store is a list of hashes.
+**Label every model with the iteration it belongs to.** `model_labels` is what makes turn 3 of the loop findable a week later.
 
 The SSM and rtf2 families share one flat config shape — `encoder` / `model` / `train` / `quality_check` (+ `relational` for the time variants) — instead of the per-model nesting the GAN and rtf v1 actions use, and `quality_check` is where the step-2 gate lands:
 

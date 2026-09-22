@@ -326,8 +326,8 @@ def generate_action_for(decision: str):
         # GenerateTimeSSM lowers gen_batch to 32 by default; GenerateTabSSM does
         # NOT -- it keeps the base 256. On a CPU worker (no CUDA kernels) the
         # naive Mamba-2 path materialises a huge per-step intermediate at that
-        # batch size and generation does not finish. Observed: a 4000-row model
-        # sat in "Start generating samples..." for hours on a cpu worker set.
+        # batch size and generation crawls. Measured on a cpu worker set: 2h38m
+        # to emit 4000 records from a 4000-row model, one pass, 100% valid.
         return ra.GenerateTabSSM(ra.GenerateTabSSM.Config(
             sampling=ra.GenerateTabSSM.SamplingConfig(gen_batch=32)))
     if decision in ("tab_rtf2", "tab_transformer"):
