@@ -26,14 +26,6 @@ A skill can bundle a reference implementation under `skills/<skill-name>/referen
 
 After adding or editing a skill, install and test it locally.
 
-## Checks
-
-`scripts/check_skills.py` validates the YAML frontmatter of every `skills/*/SKILL.md`. A skill whose frontmatter does not parse is not a skill with a bug — it is a skill the host never loads, and nothing else in the repo notices. Worth running after editing a skill:
-
-```bash
-pip install pyyaml && python scripts/check_skills.py
-```
-
 ## Pull requests
 
 - Open a PR against `main`.
