@@ -113,8 +113,8 @@ Drops, fills, and casts fold into **one** `ra.SQL` projection; directional fills
 
 Here is a list of best practices accumulated through the time:
 
-- **Bounded numeric columns** — capped by a constant or another column (`usage` ≤ `capacity`). Train on `ln(p/(1-p))`, invert with `capacity / (1 + exp(-z))`, so the bound holds by construction. Clipping instead piles mass on the boundary that step 6 then reports as a spike the real data lacks. See [bounded numeric columns](reference/pipeline.md#bounded-numeric-columns).
-- **Heavy-tailed unbounded columns** — bytes, counts, per-step increments. The model sees the column normalised, so one large outlier can push 99%+ of the values below 0.01, where distinct magnitudes become the same number. `ra.LogEncode` / `ra.LogDecode` (`log1p` / `expm1`) restores the resolution; `log1p` rather than `log` so exact zeros survive. See [heavy-tailed unbounded columns](reference/pipeline.md#heavy-tailed-unbounded-columns).
+- **Bounded numeric columns** — capped by a constant or another column (`usage` ≤ `capacity`). Train on `ln(p/(1-p))`, invert with `capacity / (1 + exp(-z))`, so the bound holds by construction. Clipping instead piles mass on the boundary that step 6 then reports as a spike the real data lacks. See [pipeline.md#bounded numeric columns](reference/pipeline.md#bounded-numeric-columns).
+- **Heavy-tailed unbounded columns** — bytes, counts, per-step increments. The model sees the column normalised, so one large outlier can push 99%+ of the values below 0.01, where distinct magnitudes become the same number. `ra.LogEncode` / `ra.LogDecode` (`log1p` / `expm1`) restores the resolution; `log1p` rather than `log` so exact zeros survive. See [pipeline#heavy-tailed unbounded columns](reference/pipeline.md#heavy-tailed-unbounded-columns).
 - **Float-coded state machines** — a phase stored as `1.0 / 2.0 / 3.0` trains as continuous and generates `2.37`. Cast to VARCHAR; `config.categorical_cast_columns` lists the candidates.
 - **Epoch-numeric timestamps** — `config.timestamp_prep` gives the `to_timestamp_*(CAST(col AS BIGINT))` expression.
 
@@ -245,7 +245,7 @@ Then map the failure to the step that owns it. Going straight to step 4 and addi
 
 `RFScore = min(marginal, correlation, association)`, gate **0.85**. `TS score = min(session_length, autocorr, transition)`. Both are minimums so one broken dimension cannot hide behind three good ones.
 
-Then drill down with `rl.metrics` / `rl.vis` per field, `rl.metrics.distance_to_closest_record_score` and `memorization_rate` for privacy, and the `ra.Evaluate*` actions for privacy attacks and downstream utility. Full detail — the exact formula behind every card field, what to change when a score is low, and the privacy and utility surfaces: [`reference/evaluation.md`](reference/evaluation.md).
+Then drill down with `rl.metrics` per field, `rl.metrics.distance_to_closest_record_score` and `memorization_rate` for privacy, and the `ra.Evaluate*` actions for privacy attacks and downstream utility. To *show* any of it, fetch the data — `rf.metrics.*` all return a `LocalDataset`, and the card carries per-column detail — and render it yourself rather than calling `rockfish.labs.vis`. Full detail — the exact formula behind every card field, what to change when a score is low, and the privacy and utility surfaces: [`reference/evaluation.md`](reference/evaluation.md).
 
 ## Rules that cause most failures
 

@@ -15,7 +15,7 @@ Lead with the [report card](#the-report-card) for fidelity. It gives one compara
 - [The measurement guards](#the-measurement-guards)
 - [Per-field fidelity metrics](#per-field-fidelity-metrics)
 - [Session metrics — time series only](#session-metrics--time-series-only)
-- [Plots](#plots)
+- [Visualizing — fetch the data, render it yourself](#visualizing--fetch-the-data-render-it-yourself)
 - [Privacy](#privacy)
 - [Downstream utility](#downstream-utility)
 - [Bounded columns](#bounded-columns)
@@ -261,22 +261,41 @@ Transitions can be counted three ways. For `Session 1: A→B→B` and `Session 2
 | k-gram collapsed (k=2) | `A→B` | `A→B`, `B→C` |
 | full collapsed | `A→B` | `A→B→C` |
 
-## Plots
+## Visualizing — fetch the data, render it yourself
 
-`rockfish.labs.vis` (`rl.vis`). Each takes a list of datasets so real and synthetic overlay.
+**Do not reach for `rockfish.labs.vis`.** It is a thin matplotlib/seaborn wrapper that draws a figure and returns nothing, which makes it the wrong shape for an agent: you cannot inspect what it drew, caption it, restyle it, or put it in a report. Every comparison it offers is available as *data*, and an agent renders that far better than a fixed plotting helper can.
+
+The useful property is that **each `rf.metrics.*` function returns a `LocalDataset`**, so `.to_pandas()` gives you a frame to plot however you like:
+
+| What you want to see | Fetch it with | Shape |
+| --- | --- | --- |
+| Distribution of one field, real vs synthetic | `dataset.to_pandas()[field]`, `syn.to_pandas()[field]` | two series — histogram, KDE, or ECDF |
+| Rows per session | `rf.metrics.session_length(ds)` | one row per session |
+| Gaps between consecutive rows | `rf.metrics.interarrivals(ds, "timestamp")` | one row per gap |
+| Category frequencies | `rf.metrics.count_all(ds, field, nlargest=10)` | value / count |
+| State transitions | `rf.metrics.transitions_within_sessions(ds, field=…)` | transition / count |
+| Per-column fidelity across the whole table | `card.scores["per_column"]` | `{column: {score, null_real, null_synth, vacuous, …}}` |
+| Lag-1 autocorrelation per column | `card.ts["autocorr_detail"]` | `{column: [real, synthetic]}` |
 
 ```python
-rl.vis.plot_kde([dataset, syn], "amount")                  # continuous
-rl.vis.plot_hist([dataset, syn], "amount")
-rl.vis.plot_cdf([dataset, syn], "amount")
-rl.vis.plot_bar([source_agg, syn_agg], "category", "category_count")   # categorical
-rl.vis.plot_correlation([dataset, syn], "SBP", "DBP", alpha=0.5)
-rl.vis.plot_correlation_heatmap([dataset, syn], numeric_fields, annot=True, fmt=".2f")
-rl.vis.plot_association_heatmap([dataset, syn], categorical_fields)
-rl.vis.plot_kde([source_ia, syn_ia], "interarrival", duration_unit="s")
+real_len = rf.metrics.session_length(src).to_pandas()
+syn_len = rf.metrics.session_length(syn_md).to_pandas()
+# -> two frames; draw them with whatever the surface supports
 ```
 
-Also `plot_distribution`, `plot_scatter`, `custom_plot`. `plot_bar` takes `orient="horizontal"` for long transition labels.
+The report card is the richest source here: `card.to_dict()` carries every per-column score, the null structure, the state-machine results and the guards, so a single card renders a whole scorecard without recomputing anything.
+
+For correlation and association matrices there is no public data accessor — `rl.metrics` exposes only the scalar `correlation_score` / `association_score`, and the matrix builders are private. Compute them directly instead:
+
+```python
+real_df[numeric_fields].corr()          # pandas, for the numeric heatmap
+```
+
+or borrow the report card's own, which apply its canonicalization:
+
+```python
+from rockfish.labs.report_card.metrics import corr_matrix, cramers_matrix
+```
 
 ## Privacy
 
