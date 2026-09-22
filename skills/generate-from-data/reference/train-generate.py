@@ -525,14 +525,23 @@ async def example_tabular(conn) -> None:
 # a state and not as a number; the counter -> its per-step increment, in log1p
 # space, because the level is unbounded and monotone while the delta is neither.
 SESSIONS_ENCODE_SQL = """
-    SELECT job, region, tier,
-           to_timestamp_seconds(CAST("event_time" AS BIGINT)) AS ts,
-           CAST(CAST("status" AS INT) AS VARCHAR)             AS status,
-           latency_ms, queue_depth,
-           ln(1 + GREATEST("bytes_written"
-               - LAG("bytes_written", 1, 0.0) OVER (
-                   PARTITION BY job ORDER BY "event_time"), 0.0)) AS bytes_delta
-    FROM my_table
+    SELECT job, region, tier, ts, status, latency_ms, bytes_delta,
+           COALESCE(qd_fwd, qd_bwd) AS queue_depth
+    FROM (
+      SELECT job, region, tier,
+             to_timestamp_seconds(CAST("event_time" AS BIGINT))  AS ts,
+             CAST(CAST("status" AS INT) AS VARCHAR)              AS status,
+             latency_ms,
+             LAST_VALUE("queue_depth" IGNORE NULLS) OVER (
+               PARTITION BY job ORDER BY "event_time"
+               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)  AS qd_fwd,
+             FIRST_VALUE("queue_depth" IGNORE NULLS) OVER (
+               PARTITION BY job ORDER BY "event_time"
+               ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)  AS qd_bwd,
+             ln(1 + GREATEST("bytes_written" - LAG("bytes_written", 1, 0.0) OVER (
+               PARTITION BY job ORDER BY "event_time"), 0.0))      AS bytes_delta
+      FROM my_table
+    )
 """
 
 
@@ -601,18 +610,25 @@ async def example_timeseries(conn) -> None:
 
     # ---- step 3: prepare -------------------------------------------------
     step(3, "prepare")
-    # One SQL projection: epoch -> timestamp, float state -> VARCHAR, counter ->
-    # log1p of its per-step increment. Then the directional fill PAIR for the
-    # gappy sensor -- forward alone cannot fill a leading null run, and the
-    # survivor reaches the encoder as NaT, which is not in the vocabulary.
-    from rockfish.actions.apply_transform import Field, FillNullBackward, FillNullForward
-
+    # One SQL projection does all of it: epoch -> timestamp, float state ->
+    # VARCHAR, counter -> log1p of its per-step increment, and the directional
+    # fill PAIR for the gappy sensor.
+    #
+    # The fill is a window function PARTITIONed BY job on purpose.
+    # ra.Transform(FillNullForward(...)) calls pyarrow's fill_null_forward over
+    # the WHOLE column with no notion of sessions, so a session whose first row
+    # is null inherits the previous session's last value. Measured on this
+    # fixture: 27 of 160 sessions start null and 30 rows differ from a
+    # per-session fill. dataset_profiler.preprocess_actions emits those same
+    # session-blind Transforms, so this applies to the recommended path too.
+    #
+    # Forward alone cannot fill a leading null run, hence COALESCE with a
+    # backward pass; a surviving null reaches the encoder as NaT, which is not
+    # in the vocabulary.
     prep = rf.WorkflowBuilder()
     prep.add_path(
         to_dataset("jobs", raw),
         ra.SQL(query=SESSIONS_ENCODE_SQL),
-        ra.Transform(ra.Transform.Config(function=FillNullForward(Field("queue_depth")))),
-        ra.Transform(ra.Transform.Config(function=FillNullBackward(Field("queue_depth")))),
         ra.DatasetSave(name="jobs-prepared"),
     )
     wf = await run(conn, prep, "prepare")

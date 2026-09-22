@@ -109,7 +109,7 @@ If the floor itself comes back low, stop and go back to step 1 — usually the s
 
 ## 3. Prepare
 
-Drops, fills, and casts fold into **one** `ra.SQL` projection; directional fills become `ra.Transform` pairs. Full detail and the transform reference table are in [`reference/pipeline.md`](reference/pipeline.md#preprocessing).
+Drops, fills, and casts fold into **one** `ra.SQL` projection. Directional fills become `ra.Transform` pairs — but those are **session-blind**, so on sessionized data do the fill in SQL with a window partitioned by the session key instead. Full detail and the transform reference table are in [`reference/pipeline.md`](reference/pipeline.md#preprocessing).
 
 Here is a list of best practices accumulated through the time:
 

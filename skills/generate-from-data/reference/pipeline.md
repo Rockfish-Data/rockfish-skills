@@ -252,7 +252,7 @@ sql = ra.SQL(ra.SQL.Config(
 ))
 ```
 
-**Directional fills** cannot be expressed type-safely in SQL and become `Transform` actions. Always emit them in **pairs** — a forward fill cannot fill a leading null run, and the surviving null reaches the encoder as `NaT`, which is not in the codec vocabulary:
+**Directional fills** become `Transform` actions, and must be emitted in **pairs** — a forward fill cannot fill a leading null run, and the surviving null reaches the encoder as `NaT`, which is not in the codec vocabulary:
 
 ```python
 from rockfish.actions.apply_transform import Field, FillNull, FillNullForward, FillNullBackward
@@ -260,6 +260,26 @@ from rockfish.actions.apply_transform import Field, FillNull, FillNullForward, F
 ra.Transform(ra.Transform.Config(function=FillNullForward(Field("ts"))))
 ra.Transform(ra.Transform.Config(function=FillNullBackward(Field("ts"))))
 ```
+
+**These are session-blind — do not use them on sessionized data.** `FillNullForward` calls `pyarrow.compute.fill_null_forward` over the whole column with no notion of sessions, so a session whose first row is null inherits the **previous session's last value**. Measured on a 160-session fixture with 12% nulls: 27 sessions begin with a null and 30 rows differ from a per-session fill. `dataset_profiler.preprocess_actions` emits these same Transforms, so the recommended path has the same property.
+
+For a sessionized column, do the fill in the SQL projection with a window partitioned by the session key:
+
+```sql
+SELECT ..., COALESCE(qd_fwd, qd_bwd) AS queue_depth
+FROM (
+  SELECT ...,
+         LAST_VALUE("queue_depth" IGNORE NULLS) OVER (
+           PARTITION BY session ORDER BY ts
+           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)  AS qd_fwd,
+         FIRST_VALUE("queue_depth" IGNORE NULLS) OVER (
+           PARTITION BY session ORDER BY ts
+           ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)  AS qd_bwd
+  FROM my_table
+)
+```
+
+The `COALESCE` is the pair: `LAST_VALUE` is the forward pass, `FIRST_VALUE` the backward one that covers a leading null run.
 
 **Epoch-numeric timestamps** need a cast before they can serve as the time axis — `config.timestamp_prep` gives you the expression, e.g. `to_timestamp_seconds(CAST("ts" AS BIGINT))`.
 
