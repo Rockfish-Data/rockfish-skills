@@ -262,7 +262,9 @@ Profiler-tuned starting points, by archetype:
 | time, `alarm` archetype (max/p50 ≥ 10) | 12 | 32 | skewed lengths punish large batches |
 | time, `mixed` | 12 | 32 | |
 
-All time rows also set `gradient_checkpointing=True`. The profiler then caps `batch_size` at `32_768 // output_max_length` — `batch_size × output_max_length` is the real memory knob (17,723 tokens measured 8.2 GB at batch 1). Measured on the RAN engagement: 24 epochs scored 0.9373 against 12 epochs' 0.9371, so **12 is the honest default** for time models.
+All time rows also set `gradient_checkpointing=True`. The profiler then caps `batch_size` at `32_768 // output_max_length` — `batch_size × output_max_length` is the real memory knob (17,723 tokens measured 8.2 GB at batch 1).
+
+**Treat the archetype batch sizes as starting points, not findings.** The SDK carries its own provenance caveat on them: the only clean batch measurement behind these numbers is one skewed dataset at ~512-token sequences, where batch 4 beat batch 64 on both speed and score. The `panel` batch 64 row was **never verified at panel-length sequences**, and the RAN runs that produced the epoch comparison (24 epochs 0.9373 vs 12 epochs 0.9371) were made before `sub_session_chunk_size` existed, so they were silently dropping long sessions. That is why the token-per-batch bound above exists — it is trusted over the archetype numbers. Measure on your own data before treating any of this row as settled.
 
 ### `QualityCheckConfig` — the RFScore training stop
 
