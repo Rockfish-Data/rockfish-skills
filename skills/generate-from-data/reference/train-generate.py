@@ -380,11 +380,23 @@ ORDERS_DECODE_SQL = """
 
 
 def _collapse(series: pd.Series, threshold: float = 0.01) -> float:
-    """Share of min-max normalised values under `threshold`."""
-    lo, hi = float(series.min()), float(series.max())
+    """Share of min-max normalised values under `threshold`, ignoring exact zeros.
+
+    The zeros are excluded on purpose. bytes_sent is ~60% exact zeros, and a
+    zero is *supposed* to normalise to 0.0 -- counting the point mass as
+    "collapsed" swamps the measurement and makes log1p look like it did
+    nothing (97.6% -> 59.7%, which is just the zero fraction reasserting
+    itself). What the transform is there to fix is the resolution of the
+    values that actually span a range: among those, the same column goes
+    94.1% -> 0.1%.
+    """
+    values = series[series > 0]
+    if len(values) == 0:
+        return 1.0
+    lo, hi = float(values.min()), float(values.max())
     if hi == lo:
         return 1.0
-    return float((((series - lo) / (hi - lo)) < threshold).mean())
+    return float((((values - lo) / (hi - lo)) < threshold).mean())
 
 
 async def example_tabular(conn) -> None:
@@ -408,8 +420,8 @@ async def example_tabular(conn) -> None:
     # judgement the profiler cannot make for you, and the reason to look at the
     # data before preparing it.
     collapse_before = _collapse(raw["bytes_sent"])
-    print(f"  bytes_sent: {collapse_before:.2%} of values below 0.01 once normalised"
-          f" -- a model would see almost all of them as the same number")
+    print(f"  bytes_sent: {collapse_before:.2%} of its non-zero values fall below 0.01"
+          f" once normalised -- a model would see almost all of them as one number")
     print("  quota_used is bounded by quota_total; both endpoints carry real mass")
 
     # ---- step 2: set the target -----------------------------------------
