@@ -557,6 +557,19 @@ SESSIONS_ENCODE_SQL = """
 """
 
 
+# Inverse of the counter step: expm1 the per-step increment and accumulate it
+# back into a level, within each generated session, in GENERATION order. `seq`
+# is why sequence_index_column is worth setting -- generated timestamps are just
+# another modelled field, neither monotone nor unique, so ordering by them would
+# reconstruct the counter in the wrong order.
+SESSIONS_DECODE_SQL = """
+    SELECT *,
+           SUM(exp(bytes_delta) - 1) OVER (
+             PARTITION BY session_key ORDER BY seq
+             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS bytes_written
+    FROM my_table
+"""
+
 async def example_timeseries(conn) -> None:
     print("\n=== 2. time-series: job sessions ===")
     raw, legal = make_sessions_source()
@@ -607,12 +620,12 @@ async def example_timeseries(conn) -> None:
         state_fields=[StateFieldSpec(
             "status", legal_transitions={(a, b) for a, bs in legal.items() for b in bs})],
         metadata_columns=["region", "tier"],
-        # NOT counters=["bytes_delta"]. CardSpec.counters means per-session
-        # MONOTONE columns, and counter_monotonicity scores (diff >= 0). The
-        # prepared column is log1p of the increment -- non-negative, but its own
-        # diff goes up and down, so declaring it a counter scores 0.51 on real
-        # data whose true counter scores 1.0. Reconstruct the level with
-        # cumsum(expm1(...)) after generation and score that instead.
+        # The counter is the RECONSTRUCTED level, not the delta the model saw.
+        # CardSpec.counters means per-session MONOTONE columns and
+        # counter_monotonicity scores (diff >= 0); bytes_delta is log1p of an
+        # increment, non-negative but not monotone, and declaring it here scores
+        # 0.51 on real data whose true counter scores 1.0.
+        counters=["bytes_written"],
     )
     floor = noise_floor(prepared_real, spec)
     print(floor.summary())
@@ -716,9 +729,26 @@ async def example_timeseries(conn) -> None:
     builder.add_action(target, parents=[generate])
     builder.add_action(ra.DatasetSave(name="jobs-synthetic"), parents=[generate])
     wf = await run(conn, builder, "generate")
-    syn = await wf.datasets().concat(conn)
+    syn_encoded = await wf.datasets().concat(conn)
+    print(f"  generated {syn_encoded.table.num_rows} rows in transformed space")
+
+    # Undo the counter transform. Without this the output carries bytes_delta --
+    # a log1p increment -- where the source had a monotone level, so the
+    # synthetic table has a different schema from the real one and the counter
+    # cannot be scored at all.
+    if "seq" in syn_encoded.table.column_names:
+        post = rf.WorkflowBuilder()
+        post.add_path(syn_encoded, ra.SQL(query=SESSIONS_DECODE_SQL),
+                      ra.DatasetSave(name="jobs-synthetic"))
+        wf = await run(conn, post, "decode")
+        syn = await wf.datasets().concat(conn)
+    else:
+        # No generation-order column (non-SSM path): reconstructing the counter
+        # would have to guess an order, and a wrong order is worse than no
+        # counter, so leave it encoded and say so.
+        print("  no `seq` column -- counter left as bytes_delta, not reconstructed")
+        syn = syn_encoded
     syn_df = syn.to_pandas()
-    print(f"  generated {len(syn_df)} rows")
 
     # ---- step 6: evaluate ------------------------------------------------
     step(6, "evaluate")
@@ -762,8 +792,12 @@ def _prepare_sessions_locally(raw: pd.DataFrame) -> pd.DataFrame:
                          .groupby(df["job"]).bfill())
     delta = df.groupby("job")["bytes_written"].diff().fillna(0.0).clip(lower=0.0)
     df["bytes_delta"] = np.log1p(delta)
+    # bytes_written stays so the card has a real counter to compare the
+    # reconstructed synthetic one against. The model never sees this column --
+    # it trains on bytes_delta -- but the level is what the source actually had
+    # and what the output is supposed to look like again after decoding.
     return df[["job", "region", "tier", "ts", "status",
-               "latency_ms", "queue_depth", "bytes_delta"]]
+               "latency_ms", "queue_depth", "bytes_delta", "bytes_written"]]
 
 
 # ---------------------------------------------------------------------------
