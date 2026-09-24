@@ -79,9 +79,11 @@ async def inspect_source(conn, dataset_id: str, tag: str, session_field: str) ->
     meta = json.loads((head.schema.metadata or {}).get(b"source_metadata", b"{}"))
     # Generated datasets carry a session_field (e.g. session_key) that can be
     # finer than the entity id: synthetic `job` values repeat across sessions.
-    basis = meta.get("session_field") or session_field
+    # A blend written by this script has a session_key column its metadata
+    # doesn't name, so fall back to it before the entity id.
+    basis = meta.get("session_field")
     if basis not in head.column_names:
-        basis = session_field
+        basis = SESSION_KEY if SESSION_KEY in head.column_names else session_field
     if basis not in head.column_names:
         raise SystemExit(f"{dataset_id}: session field {basis!r} not in {head.column_names}")
     counts = (await ds.sql(
