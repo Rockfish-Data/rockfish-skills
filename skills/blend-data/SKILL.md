@@ -57,6 +57,43 @@ The skill's reference script runs these in order; each maps to a function in `bl
 
    Report these numbers to the user; don't claim success on a completed workflow alone.
 
+### Example: the resulting workflow
+
+The blend workflow built by `blend.py --dataset 401XMCUqMDpF7Uu0mLnhQE --dataset 3nmJkuoPr7Vxv3OAxvixRD --time-field ts --session-field job --tags real,syn --sessions 80, --seed 7`, which blends 80 real `jobs` sessions with all 160 synthetic ones. The synthetic branch has no cap but still gets a `sample` step, sized to its full 160 sessions, because a sampled and an unsampled branch don't match on append (see Pitfalls). Action names (`dataset-load1`, `sql1`, ...) are the ones the workflow logs show. The sort workflow (step 6) then reads `jobs-blend-capped2-unsorted` and writes the final dataset.
+
+```mermaid
+flowchart LR
+    subgraph REAL["Real branch"]
+        direction LR
+        L1["dataset-load<br/>401XMCUqMDpF7Uu0mLnhQE"]
+        S1["sql<br/>prefix real-, rank by job"]
+        P1["sample<br/>80 sessions, seed 7"]
+        L1 --> S1 --> P1
+    end
+
+    subgraph SYN["Synthetic branch"]
+        direction LR
+        L2["dataset-load1<br/>3nmJkuoPr7Vxv3OAxvixRD"]
+        S2["sql1<br/>prefix syn-, re-rank session_key"]
+        P2["sample1<br/>160 sessions, seed 7"]
+        L2 --> S2 --> P2
+    end
+
+    SAVE["dataset-save<br/>concat on session_key"]
+    OUT[("jobs-blend-capped2-unsorted")]
+
+    P1 --> SAVE
+    P2 --> SAVE
+    SAVE --> OUT
+
+    classDef real fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef syn fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    classDef neutral fill:#F1EFE8,stroke:#5F5E5A,color:#444441
+    class L1,S1,P1 real
+    class L2,S2,P2 syn
+    class SAVE,OUT neutral
+```
+
 ### Alternative: one SQL action (`--mode union`)
 
 For moderate sizes, a single `ra.SQL` with `dataset_name_to_id` can do align + blend + sort in one workflow with no intermediate dataset:
