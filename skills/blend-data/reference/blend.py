@@ -60,6 +60,10 @@ def quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
 def normalize(t: pa.DataType) -> pa.DataType:
     # string / large_string are one logical type; parquet round trips flip them.
     if t == pa.large_string():
@@ -81,15 +85,29 @@ async def inspect_source(conn, dataset_id: str, tag: str, session_field: str) ->
     if basis not in head.column_names:
         raise SystemExit(f"{dataset_id}: session field {basis!r} not in {head.column_names}")
     counts = (await ds.sql(
-        f"SELECT COUNT(*) AS n, COUNT(DISTINCT {quote(basis)}) AS s FROM my_table", conn=conn
+        f"SELECT COUNT(*) AS n, COUNT(DISTINCT {quote(basis)}) AS s, "
+        f"COUNT(*) - COUNT({quote(basis)}) AS nulls FROM my_table", conn=conn
     )).table.to_pylist()[0]
+    # COUNT(DISTINCT) skips NULL but DENSE_RANK gives the NULL rows a key of
+    # their own, so session counts, caps and verification would all disagree.
+    if counts["nulls"]:
+        raise SystemExit(f"{dataset_id}: {counts['nulls']} rows have a NULL {basis!r}; "
+                         f"fill or drop them before blending")
     return Source(dataset_id, ds.name(), tag, head.schema, counts["n"], counts["s"], basis)
 
 
-def validate(sources: list[Source], time_field: str, session_field: str, on_extra: str) -> list[pa.Field]:
+def validate(sources: list[Source], time_field: str, session_field: str, on_extra: str,
+             source_field: str | None) -> list[pa.Field]:
     """Return the common fields (in first-source order) or exit on a conflict."""
     base = sources[0].schema
     problems, extras = [], []
+    if source_field:
+        # e.g. re-blending an earlier blend that already has blend_source
+        taken = [s.tag for s in sources if source_field in s.schema.names]
+        if taken or source_field in (SESSION_KEY, "_blend_src", "_blend_basis"):
+            raise SystemExit(f"--source-field {source_field!r} is already a field "
+                             f"(in {', '.join(taken) or 'the generated output'}); "
+                             f"pick another name, or pass --source-field '' to omit it")
     common = []
     for f in base:
         if f.name == SESSION_KEY:
@@ -133,7 +151,7 @@ def select_list(common: list[pa.Field], src: Source, session_field: str,
     for f in common:
         if f.name == session_field and namespace and pa.types.is_string(f.type):
             # keep entity ids from different sources distinct: real J00137 != synthetic J00137
-            cols.append(f"'{src.tag}-' || {quote(f.name)} AS {quote(f.name)}")
+            cols.append(f"{literal(src.tag + '-')} || {quote(f.name)} AS {quote(f.name)}")
         elif f.name == session_field and namespace and pa.types.is_integer(f.type):
             # integer ids can't take a prefix without changing type; shift each
             # input into its own range instead (see assign_id_shifts)
@@ -141,7 +159,7 @@ def select_list(common: list[pa.Field], src: Source, session_field: str,
         else:
             cols.append(quote(f.name))
     if source_field:
-        cols.append(f"'{src.tag}' AS {quote(source_field)}")
+        cols.append(f"{literal(src.tag)} AS {quote(source_field)}")
     return cols
 
 
@@ -251,7 +269,7 @@ async def main(args):
                   f"{s.sessions} sessions by {s.session_basis!r}")
 
         print("2. validate")
-        common = validate(sources, args.time_field, args.session_field, args.on_extra)
+        common = validate(sources, args.time_field, args.session_field, args.on_extra, source_field)
         print(f"  common fields: {[f.name for f in common]}")
 
         namespace = not args.no_namespace
