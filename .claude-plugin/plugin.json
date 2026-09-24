@@ -1,6 +1,6 @@
 {
   "name": "rockfish-skills",
-  "description": "Claude Skills for the Rockfish synthetic-data SDK: schema-based generation, incident injection, and Snowflake analysis.",
+  "description": "Claude Skills for the Rockfish synthetic-data SDK: schema-based generation, dataset blending, incident injection, and Snowflake analysis.",
   "version": "0.2.0",
   "author": {
     "name": "Rockfish Data",
