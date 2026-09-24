@@ -103,14 +103,18 @@ async def inspect_source(conn, dataset_id: str, tag: str, session_field: str,
     if counts["nulls"]:
         raise SystemExit(f"{dataset_id}: {counts['nulls']} rows have a NULL {basis!r}; "
                          f"fill or drop them before blending")
-    if time_field in head.column_names:
-        # NULL timestamps have no place in a time-ordered blend, and they make
-        # the ordering check meaningless.
+    # NULL timestamps have no place in a time-ordered blend and make the
+    # ordering check meaningless. A NULL entity id (when the basis is another
+    # field) would pass the key check, then namespace to NULL and collapse
+    # into one group downstream.
+    for name in dict.fromkeys([time_field, session_field]):
+        if name == basis or name not in head.column_names:
+            continue
         nulls = (await ds.sql(
-            f"SELECT COUNT(*) - COUNT({quote(time_field)}) AS nulls FROM my_table", conn=conn
+            f"SELECT COUNT(*) - COUNT({quote(name)}) AS nulls FROM my_table", conn=conn
         )).table.to_pylist()[0]["nulls"]
         if nulls:
-            raise SystemExit(f"{dataset_id}: {nulls} rows have a NULL {time_field!r}; "
+            raise SystemExit(f"{dataset_id}: {nulls} rows have a NULL {name!r}; "
                              f"fill or drop them before blending")
     return Source(dataset_id, ds.name(), tag, head.schema, counts["n"], counts["s"], basis)
 
@@ -183,20 +187,24 @@ def select_list(common: list[pa.Field], src: Source, session_field: str,
                 source_field: str | None, namespace: bool) -> list[str]:
     cols = []
     for f in common:
+        col = quote(f.name)
         if f.name == session_field and namespace and pa.types.is_string(f.type):
             # keep entity ids from different sources distinct: real J00137 != synthetic J00137
-            cols.append(f"{literal(src.tag + '-')} || {quote(f.name)} AS {quote(f.name)}")
+            expr = f"{literal(src.tag + '-')} || {col}"
         elif f.name == session_field and namespace and pa.types.is_integer(f.type):
             # integer ids can't take a prefix without changing type; shift each
             # input into its own range instead (see assign_id_shifts)
-            cols.append(f"{quote(f.name)} + {src.id_shift} AS {quote(f.name)}")
+            expr = f"{col} + {src.id_shift}"
         elif pa.types.is_timestamp(f.type):
             # the time field gets one target type for every input (see validate);
             # for any other timestamp field the types already match and this is a no-op
-            cols.append(f"arrow_cast({quote(f.name)}, {literal(arrow_cast_name(f.type))}) "
-                        f"AS {quote(f.name)}")
+            expr = f"arrow_cast({col}, {literal(arrow_cast_name(f.type))})"
         else:
-            cols.append(quote(f.name))
+            expr = col
+        # Inputs can agree on type but not nullability, and DatasetSave's append
+        # rejects that. NULLIF(x, NULL) returns x unchanged but is always nullable,
+        # so every branch emits the same schema.
+        cols.append(f"NULLIF({expr}, NULL) AS {col}")
     if source_field:
         cols.append(f"{literal(src.tag)} AS {quote(source_field)}")
     return cols
