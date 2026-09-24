@@ -73,7 +73,15 @@ def normalize(t: pa.DataType) -> pa.DataType:
     return t
 
 
-async def inspect_source(conn, dataset_id: str, tag: str, session_field: str) -> Source:
+def arrow_cast_name(t: pa.DataType) -> str:
+    """DataFusion arrow_cast() spelling of a timestamp type."""
+    unit = {"s": "Second", "ms": "Millisecond", "us": "Microsecond", "ns": "Nanosecond"}[t.unit]
+    tz = f'Some("{t.tz}")' if t.tz else "None"
+    return f"Timestamp({unit}, {tz})"
+
+
+async def inspect_source(conn, dataset_id: str, tag: str, session_field: str,
+                         time_field: str) -> Source:
     ds = await conn.get_dataset(dataset_id)
     head = (await ds.sql("SELECT * FROM my_table LIMIT 0", conn=conn)).table
     meta = json.loads((head.schema.metadata or {}).get(b"source_metadata", b"{}"))
@@ -95,6 +103,15 @@ async def inspect_source(conn, dataset_id: str, tag: str, session_field: str) ->
     if counts["nulls"]:
         raise SystemExit(f"{dataset_id}: {counts['nulls']} rows have a NULL {basis!r}; "
                          f"fill or drop them before blending")
+    if time_field in head.column_names:
+        # NULL timestamps have no place in a time-ordered blend, and they make
+        # the ordering check meaningless.
+        nulls = (await ds.sql(
+            f"SELECT COUNT(*) - COUNT({quote(time_field)}) AS nulls FROM my_table", conn=conn
+        )).table.to_pylist()[0]["nulls"]
+        if nulls:
+            raise SystemExit(f"{dataset_id}: {nulls} rows have a NULL {time_field!r}; "
+                             f"fill or drop them before blending")
     return Source(dataset_id, ds.name(), tag, head.schema, counts["n"], counts["s"], basis)
 
 
@@ -116,6 +133,23 @@ def validate(sources: list[Source], time_field: str, session_field: str, on_extr
             continue  # regenerated below
         types = {s.tag: normalize(s.schema.field(f.name).type)
                  for s in sources if f.name in s.schema.names}
+        if f.name == time_field and len(types) == len(sources):
+            # Timestamps may arrive as timestamp types of any unit/tz or as
+            # ISO 8601 strings (generate-from-schema emits strings). The align
+            # SQL casts every input to one target type.
+            bad = {k: v for k, v in types.items()
+                   if not (pa.types.is_timestamp(v) or pa.types.is_string(v))}
+            if bad:
+                problems.append(f"{f.name}: " + ", ".join(f"{k}={v}" for k, v in bad.items())
+                                + " (need a timestamp or an ISO 8601 string)")
+                continue
+            stamped = [v for v in types.values() if pa.types.is_timestamp(v)]
+            target = stamped[0] if stamped else pa.timestamp("us", "UTC")
+            if any(v != target for v in types.values()):
+                print(f"  {f.name}: casting " + ", ".join(f"{k}={v}" for k, v in types.items())
+                      + f" to {target}")
+            common.append(pa.field(f.name, target))
+            continue
         if len(types) < len(sources):
             extras.append(f"{f.name} (only in {', '.join(types)})")
         elif len(set(types.values())) > 1:
@@ -133,8 +167,6 @@ def validate(sources: list[Source], time_field: str, session_field: str, on_extr
     for name in required:
         if name not in names:
             problems.append(f"{name!r} must be present, with one type, in every input")
-    if time_field in names and not pa.types.is_timestamp(base.field(time_field).type):
-        problems.append(f"{time_field!r} is {base.field(time_field).type}, not a timestamp")
 
     for e in sorted(set(extras)):
         print(f"  extra field: {e}")
@@ -158,6 +190,11 @@ def select_list(common: list[pa.Field], src: Source, session_field: str,
             # integer ids can't take a prefix without changing type; shift each
             # input into its own range instead (see assign_id_shifts)
             cols.append(f"{quote(f.name)} + {src.id_shift} AS {quote(f.name)}")
+        elif pa.types.is_timestamp(f.type):
+            # the time field gets one target type for every input (see validate);
+            # for any other timestamp field the types already match and this is a no-op
+            cols.append(f"arrow_cast({quote(f.name)}, {literal(arrow_cast_name(f.type))}) "
+                        f"AS {quote(f.name)}")
         else:
             cols.append(quote(f.name))
     if source_field:
@@ -248,7 +285,10 @@ async def verify(conn, ds, sources, caps, time_field, source_field):
             print(f"    {r['src']}: {r['n']} rows, {r['s']} sessions")
     # Pulls only the time column — file order is the order a reader sees.
     ts = (await ds.sql(f"SELECT {quote(time_field)} FROM my_table", conn=conn)).table[0]
-    ordered = len(ts) < 2 or pc.all(pc.greater_equal(ts[1:], ts[:-1])).as_py()
+    # pc.all skips nulls (and returns None if every comparison is null), so
+    # a null timestamp must fail the check explicitly.
+    ordered = ts.null_count == 0 and (
+        len(ts) < 2 or bool(pc.all(pc.greater_equal(ts[1:], ts[:-1])).as_py()))
     ok &= ordered
     print(f"  ordered by {time_field}: {ordered}")
     return ok
@@ -265,7 +305,8 @@ async def main(args):
 
     async with connect(args.profile) as conn:
         print("1. inspect")
-        sources = [await inspect_source(conn, d, t, args.session_field) for d, t in zip(args.dataset, tags)]
+        sources = [await inspect_source(conn, d, t, args.session_field, args.time_field)
+                   for d, t in zip(args.dataset, tags)]
         for s in sources:
             print(f"  {s.tag}: {s.name} ({s.dataset_id}) {s.rows} rows, "
                   f"{s.sessions} sessions by {s.session_basis!r}")
@@ -274,6 +315,12 @@ async def main(args):
         common = validate(sources, args.time_field, args.session_field, args.on_extra, source_field)
         print(f"  common fields: {[f.name for f in common]}")
 
+        reserved = {"_blend_src", "_blend_basis"} & {f.name for f in common}
+        if args.mode == "union" and reserved:
+            # union_query adds these helper columns; an input field of the same
+            # name would shadow them in the outer DENSE_RANK
+            raise SystemExit(f"--mode union reserves {sorted(reserved)}; rename those fields "
+                             f"or use --mode dag")
         namespace = not args.no_namespace
         entity = next((f for f in common if f.name == args.session_field), None)
         if namespace and entity is not None and pa.types.is_integer(entity.type):
