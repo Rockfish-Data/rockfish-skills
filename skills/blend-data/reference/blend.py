@@ -47,6 +47,7 @@ class Source:
     rows: int
     sessions: int
     session_basis: str  # field that identifies a session in *this* input
+    id_shift: int = 0   # added to integer entity ids so ranges don't overlap across inputs
 
 
 def connect(profile: str | None):
@@ -106,10 +107,13 @@ def validate(sources: list[Source], time_field: str, session_field: str, on_extr
             if name not in base.names and name != SESSION_KEY:
                 extras.append(f"{name} (only in {s.tag})")
     names = [f.name for f in common]
-    for required in (time_field, session_field):
-        if required not in names:
-            problems.append(f"{required!r} must be present, with one type, in every input")
-    if not pa.types.is_timestamp(base.field(time_field).type) and time_field in names:
+    # An entity field named session_key is regenerated for every input, so it
+    # needn't match across inputs; inspect_source already checked it exists.
+    required = [time_field] + ([session_field] if session_field != SESSION_KEY else [])
+    for name in required:
+        if name not in names:
+            problems.append(f"{name!r} must be present, with one type, in every input")
+    if time_field in names and not pa.types.is_timestamp(base.field(time_field).type):
         problems.append(f"{time_field!r} is {base.field(time_field).type}, not a timestamp")
 
     for e in sorted(set(extras)):
@@ -130,11 +134,34 @@ def select_list(common: list[pa.Field], src: Source, session_field: str,
         if f.name == session_field and namespace and pa.types.is_string(f.type):
             # keep entity ids from different sources distinct: real J00137 != synthetic J00137
             cols.append(f"'{src.tag}-' || {quote(f.name)} AS {quote(f.name)}")
+        elif f.name == session_field and namespace and pa.types.is_integer(f.type):
+            # integer ids can't take a prefix without changing type; shift each
+            # input into its own range instead (see assign_id_shifts)
+            cols.append(f"{quote(f.name)} + {src.id_shift} AS {quote(f.name)}")
         else:
             cols.append(quote(f.name))
     if source_field:
         cols.append(f"'{src.tag}' AS {quote(source_field)}")
     return cols
+
+
+async def assign_id_shifts(conn, sources: list[Source], session_field: str) -> None:
+    """Give each input's integer entity ids a disjoint range: input i maps
+    [min_i, max_i] onto [end_{i-1}, end_{i-1} + max_i - min_i]."""
+    end = None
+    for src in sources:
+        ds = await conn.get_dataset(src.dataset_id)
+        r = (await ds.sql(
+            f"SELECT MIN({quote(session_field)}) AS lo, MAX({quote(session_field)}) AS hi FROM my_table",
+            conn=conn,
+        )).table.to_pylist()[0]
+        if r["lo"] is None:
+            continue
+        if end is None:
+            end = r["lo"]  # first input keeps its ids
+        src.id_shift = end - r["lo"]
+        end = r["hi"] + src.id_shift + 1
+        print(f"  {src.tag}: {session_field} shifted by {src.id_shift:+d}")
 
 
 def align_query(common, src, session_field, source_field, namespace) -> str:
@@ -228,6 +255,12 @@ async def main(args):
         print(f"  common fields: {[f.name for f in common]}")
 
         namespace = not args.no_namespace
+        entity = next((f for f in common if f.name == args.session_field), None)
+        if namespace and entity is not None and pa.types.is_integer(entity.type):
+            await assign_id_shifts(conn, sources, args.session_field)
+        elif namespace and entity is not None and not pa.types.is_string(entity.type):
+            print(f"  WARNING: {args.session_field!r} is {entity.type}; ids are not namespaced "
+                  f"and may collide across inputs")
         if args.mode == "union":
             query = union_query(common, sources, args.session_field, source_field, namespace, args.time_field)
             print(f"3. blend (union)\n  {query}")
@@ -249,8 +282,15 @@ async def main(args):
                 query = align_query(common, src, args.session_field, source_field, namespace)
                 print(f"  {src.tag}: {query}")
                 path = [ra.DatasetLoad(dataset_id=src.dataset_id), ra.SQL(query=query)]
-                if cap:
-                    path.append(ra.Sample(session_key=SESSION_KEY, sample_size=cap,
+                if any(caps):
+                    # Every branch goes through Sample once any does: Sample rewrites
+                    # column nullability, and a branch that skips it no longer matches
+                    # the others, so the append fails. Clamp to the sessions available,
+                    # since Sample raises when sample_size exceeds them.
+                    size = min(cap or src.sessions, src.sessions)
+                    if size == src.sessions:
+                        print(f"  {src.tag}: keeping all {src.sessions} sessions")
+                    path.append(ra.Sample(session_key=SESSION_KEY, sample_size=size,
                                           sample_type="random", seed=args.seed))
                 builder.add_path(*path)
                 tails.append(path[-1])
