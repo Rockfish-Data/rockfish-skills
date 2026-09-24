@@ -201,6 +201,10 @@ def select_list(common: list[pa.Field], src: Source, session_field: str,
             expr = f"arrow_cast({col}, {literal(arrow_cast_name(f.type))})"
         else:
             expr = col
+        if pa.types.is_string(f.type) or pa.types.is_binary(f.type):
+            # validate treats string/large_string (binary/large_binary) as one
+            # type; cast so every branch emits the same variant
+            expr = f"arrow_cast({expr}, {literal('Utf8' if pa.types.is_string(f.type) else 'Binary')})"
         # Inputs can agree on type but not nullability, and DatasetSave's append
         # rejects that. NULLIF(x, NULL) returns x unchanged but is always nullable,
         # so every branch emits the same schema.
@@ -208,6 +212,28 @@ def select_list(common: list[pa.Field], src: Source, session_field: str,
     if source_field:
         cols.append(f"{literal(src.tag)} AS {quote(source_field)}")
     return cols
+
+
+async def check_time_strings(conn, sources: list[Source], time_field: str) -> None:
+    """Exit if a string time field holds values that won't parse as timestamps.
+
+    arrow_cast fails the whole query on one bad value, which would happen
+    inside the workflow; TRY_CAST turns it into NULL so it can be counted now.
+    NULLs were already rejected in inspect_source, so every NULL here is a
+    parse failure.
+    """
+    for src in sources:
+        if not pa.types.is_string(normalize(src.schema.field(time_field).type)):
+            continue
+        ds = await conn.get_dataset(src.dataset_id)
+        r = (await ds.sql(
+            f"SELECT COUNT(*) - COUNT(TRY_CAST({quote(time_field)} AS TIMESTAMP)) AS bad, "
+            f"MIN(CASE WHEN TRY_CAST({quote(time_field)} AS TIMESTAMP) IS NULL "
+            f"THEN {quote(time_field)} END) AS example FROM my_table", conn=conn,
+        )).table.to_pylist()[0]
+        if r["bad"]:
+            raise SystemExit(f"{src.dataset_id}: {r['bad']} {time_field!r} values don't parse as "
+                             f"timestamps (e.g. {r['example']!r}); fix them before blending")
 
 
 async def assign_id_shifts(conn, sources: list[Source], session_field: str) -> None:
@@ -323,6 +349,7 @@ async def main(args):
         common = validate(sources, args.time_field, args.session_field, args.on_extra, source_field)
         print(f"  common fields: {[f.name for f in common]}")
 
+        await check_time_strings(conn, sources, args.time_field)
         reserved = {"_blend_src", "_blend_basis"} & {f.name for f in common}
         if args.mode == "union" and reserved:
             # union_query adds these helper columns; an input field of the same
