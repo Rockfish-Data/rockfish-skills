@@ -310,7 +310,7 @@ async def run(conn, builder, label):
     return await wf.datasets().last()
 
 
-async def verify(conn, ds, sources, caps, time_field, source_field):
+async def verify(conn, ds, sources, caps, time_field, source_field, order_check_max_rows):
     counts = (await ds.sql(
         f"SELECT COUNT(*) AS n, COUNT(DISTINCT {SESSION_KEY}) AS s FROM my_table", conn=conn
     )).table.to_pylist()[0]
@@ -336,7 +336,14 @@ async def verify(conn, ds, sources, caps, time_field, source_field):
         )).table.to_pylist()
         for r in by_src:
             print(f"    {r['src']}: {r['n']} rows, {r['s']} sessions")
-    # Pulls only the time column — file order is the order a reader sees.
+    # Ordering depends on file order, which only a full read sees: a
+    # server-side LAG(...) OVER () is unreliable once the engine splits a large
+    # file into parallel partitions. So pull just the time column, and only up
+    # to a size bound; past it, rely on the sort step's ORDER BY.
+    if counts["n"] > order_check_max_rows:
+        print(f"  ordered by {time_field}: not checked ({counts['n']} rows > "
+              f"--order-check-max-rows {order_check_max_rows}); guaranteed by the sort step")
+        return ok
     ts = (await ds.sql(f"SELECT {quote(time_field)} FROM my_table", conn=conn)).table[0]
     # pc.all skips nulls (and returns None if every comparison is null), so
     # a null timestamp must fail the check explicitly.
@@ -440,7 +447,8 @@ async def main(args):
             final = await run(conn, builder, "sort")
 
         print(f"5. verify {final.id}")
-        if not await verify(conn, final, sources, caps, args.time_field, source_field):
+        if not await verify(conn, final, sources, caps, args.time_field, source_field,
+                            args.order_check_max_rows):
             raise SystemExit("verification failed")
         print(f"blended dataset: {final.id}")
 
@@ -462,6 +470,9 @@ if __name__ == "__main__":
                    help="fields not shared by every input: drop them or stop")
     p.add_argument("--mode", choices=["dag", "union"], default="dag")
     p.add_argument("--profile", help="config.toml profile, or 'env' for ROCKFISH_* variables")
+    p.add_argument("--order-check-max-rows", type=int, default=5_000_000,
+                   help="skip the client-side ordering check above this many rows (it downloads "
+                        "the time column); 0 always skips")
     p.add_argument("--dry-run", action="store_true", help="inspect, validate, print SQL; start nothing")
     args = p.parse_args()
     if len(args.dataset) < 2:

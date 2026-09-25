@@ -53,7 +53,7 @@ The skill's reference script runs these in order; each maps to a function in `bl
    - distinct `session_key` equals the sum of per-input sessions (or the caps);
    - no `session_key` spans more than one `blend_source`;
    - per-source row/session counts;
-   - the time column is non-decreasing (pull just that column with `SELECT ts FROM my_table`).
+   - the time column is non-decreasing. Pull just that column with `SELECT ts FROM my_table` and compare neighbours locally, up to a size bound (`--order-check-max-rows`, default 5M); past it, skip and rely on the sort step's `ORDER BY`. Don't compute this server-side with `LAG(ts) OVER ()`: once the engine splits a large file into parallel partitions, rows no longer arrive in file order, so a sorted blend can fail the check.
 
    Report these numbers to the user; don't claim success on a completed workflow alone.
 
@@ -138,6 +138,6 @@ python skills/blend-data/reference/blend.py \
     --tags real,syn --name jobs-blended
 ```
 
-Useful flags: `--dry-run` (inspect, validate, and print the align SQL without starting a workflow — run this first), `--sessions 80,160 --seed 7` (per-input session caps), `--mode union`, `--source-field ''` (omit provenance), `--no-namespace`, `--on-extra fail`, `--profile <name>|env`. Inputs are given by ID; find IDs with `conn.list_datasets()` and check each candidate's schema with the `LIMIT 0` query before proposing a pair.
+Useful flags: `--dry-run` (inspect, validate, and print the align SQL without starting a workflow — run this first), `--sessions 80,160 --seed 7` (per-input session caps), `--mode union`, `--source-field ''` (omit provenance), `--no-namespace`, `--on-extra fail`, `--order-check-max-rows N`, `--profile <name>|env`. Inputs are given by ID; find IDs with `conn.list_datasets()` and check each candidate's schema with the `LIMIT 0` query before proposing a pair.
 
 Connection: `rf.Connection.from_config()` reads `~/.config/rockfish/config.toml`; `rf.Connection.from_env()` reads `ROCKFISH_API_KEY` / `ROCKFISH_API_URL` / `ROCKFISH_PROJECT_ID` / `ROCKFISH_ORGANIZATION_ID`.
