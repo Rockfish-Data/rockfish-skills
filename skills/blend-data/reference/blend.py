@@ -89,6 +89,16 @@ async def inspect_source(conn, dataset_id: str, tag: str, session_field: str,
     # finer than the entity id: synthetic `job` values repeat across sessions.
     # A blend written by this script has a session_key column its metadata
     # doesn't name, so fall back to it before the entity id.
+    if meta.get("desired_count"):
+        # SQL re-attaches its input's metadata, so this count would reach the
+        # union SQL's or the sort pass's DatasetSave and trim the whole blend
+        # to it. No action resets it; re-save the input without it.
+        raise SystemExit(
+            f"{dataset_id}: metadata has desired_count={meta['desired_count']}, which would "
+            f"trim the blend. Re-save it without that first:\n"
+            f"  local = await (await conn.get_dataset({dataset_id!r})).to_local(conn)\n"
+            f"  meta = local.table_metadata(); meta.desired_count = None\n"
+            f"  new_id = (await local.with_table_metadata(meta).to_remote(conn)).id")
     basis = meta.get("session_field")
     if basis not in head.column_names:
         basis = SESSION_KEY if SESSION_KEY in head.column_names else session_field
@@ -333,6 +343,11 @@ async def main(args):
     caps = [int(c) if c else 0 for c in args.sessions.split(",")] if args.sessions else [0] * len(args.dataset)
     if len(tags) != len(args.dataset) or len(caps) != len(args.dataset):
         raise SystemExit("--tags and --sessions need one entry per --dataset")
+    # '<tag>-<id>' must be unambiguous: with '-' inside a tag, tag prod + id
+    # west-1 and tag prod-west + id 1 both give prod-west-1. Without it, the
+    # text before the first '-' is always the tag.
+    if any(not t or "-" in t for t in tags) or len(set(tags)) != len(tags):
+        raise SystemExit("--tags must be unique, non-empty, and contain no '-'")
     if args.mode == "union" and any(caps):
         raise SystemExit("--sessions needs --mode dag (Sample runs per branch)")
     source_field = None if args.source_field == "" else args.source_field
