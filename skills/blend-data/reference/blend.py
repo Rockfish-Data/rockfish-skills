@@ -357,9 +357,14 @@ async def verify(conn, ds, sources, caps, time_field, source_field, order_check_
 
 async def main(args):
     tags = args.tags.split(",") if args.tags else [f"s{i}" for i in range(len(args.dataset))]
-    caps = [int(c) if c else 0 for c in args.sessions.split(",")] if args.sessions else [0] * len(args.dataset)
+    try:
+        caps = [int(c) if c else 0 for c in args.sessions.split(",")] if args.sessions else [0] * len(args.dataset)
+    except ValueError:
+        raise SystemExit("--sessions takes comma-separated integers, e.g. 80,160 or 80,")
     if len(tags) != len(args.dataset) or len(caps) != len(args.dataset):
         raise SystemExit("--tags and --sessions need one entry per --dataset")
+    if any(c < 0 for c in caps):
+        raise SystemExit("--sessions caps must be >= 0 (0 or blank keeps every session)")
     # '<tag>-<id>' must be unambiguous: with '-' inside a tag, tag prod + id
     # west-1 and tag prod-west + id 1 both give prod-west-1. Without it, the
     # text before the first '-' is always the tag.
