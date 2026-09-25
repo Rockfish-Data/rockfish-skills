@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+### Added: `blend-data`
+
+A new [`blend-data`](skills/blend-data/) skill blends two or more datasets row-wise into
+one — typically real and synthetic time series — through a multi-parent workflow that
+feeds one `DatasetSave(concat_tables=True)`, or a single `UNION ALL` SQL action. The
+reference script validates schemas before starting a workflow, namespaces entity ids per
+source, regenerates globally unique session keys, optionally caps sessions per source,
+adds a provenance column, sorts by time, and verifies the result. The skill also
+documents SDK pitfalls hit along the way: opaque append failures on schema drift, stale
+session metadata passed through `SQL`, `drop_fields` ignored on append, and `Sample`
+rewriting field nullability.
+
 ## 0.2.0 — breaking
 
 ### Removed: `inject-scenarios`
