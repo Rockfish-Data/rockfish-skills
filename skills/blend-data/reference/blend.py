@@ -336,15 +336,16 @@ async def verify(conn, ds, sources, caps, time_field, source_field, order_check_
         )).table.to_pylist()
         for r in by_src:
             print(f"    {r['src']}: {r['n']} rows, {r['s']} sessions")
-    # Ordering depends on file order, which only a full read sees: a
-    # server-side LAG(...) OVER () is unreliable once the engine splits a large
-    # file into parallel partitions. So pull just the time column, and only up
-    # to a size bound; past it, rely on the sort step's ORDER BY.
+    # Ordering is a property of the stored file, and SQL doesn't promise to
+    # return rows in file order (a large file is scanned in parallel
+    # partitions) — neither `SELECT ts` nor `LAG(ts) OVER ()` can check it.
+    # Read the raw dataset instead, which downloads the parquet as stored, but
+    # only up to a size bound; past it, rely on the sort step's ORDER BY.
     if counts["n"] > order_check_max_rows:
         print(f"  ordered by {time_field}: not checked ({counts['n']} rows > "
               f"--order-check-max-rows {order_check_max_rows}); guaranteed by the sort step")
         return ok
-    ts = (await ds.sql(f"SELECT {quote(time_field)} FROM my_table", conn=conn)).table[0]
+    ts = (await ds.to_local(conn)).table[time_field]
     # pc.all skips nulls (and returns None if every comparison is null), so
     # a null timestamp must fail the check explicitly.
     ordered = ts.null_count == 0 and (
@@ -470,9 +471,9 @@ if __name__ == "__main__":
                    help="fields not shared by every input: drop them or stop")
     p.add_argument("--mode", choices=["dag", "union"], default="dag")
     p.add_argument("--profile", help="config.toml profile, or 'env' for ROCKFISH_* variables")
-    p.add_argument("--order-check-max-rows", type=int, default=5_000_000,
-                   help="skip the client-side ordering check above this many rows (it downloads "
-                        "the time column); 0 always skips")
+    p.add_argument("--order-check-max-rows", type=int, default=1_000_000,
+                   help="skip the ordering check above this many rows (it downloads the whole "
+                        "blended dataset); 0 always skips")
     p.add_argument("--dry-run", action="store_true", help="inspect, validate, print SQL; start nothing")
     args = p.parse_args()
     if len(args.dataset) < 2:

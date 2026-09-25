@@ -53,7 +53,7 @@ The skill's reference script runs these in order; each maps to a function in `bl
    - distinct `session_key` equals the sum of per-input sessions (or the caps);
    - no `session_key` spans more than one `blend_source`;
    - per-source row/session counts;
-   - the time column is non-decreasing. Pull just that column with `SELECT ts FROM my_table` and compare neighbours locally, up to a size bound (`--order-check-max-rows`, default 5M); past it, skip and rely on the sort step's `ORDER BY`. Don't compute this server-side with `LAG(ts) OVER ()`: once the engine splits a large file into parallel partitions, rows no longer arrive in file order, so a sorted blend can fail the check.
+   - the time column is non-decreasing in the stored file. Read the raw dataset (`(await ds.to_local(conn)).table`, which downloads the parquet as stored) and compare neighbours locally, up to a size bound (`--order-check-max-rows`, default 1M); past it, skip and rely on the sort step's `ORDER BY`. Don't check through SQL — neither `SELECT ts FROM my_table` nor `LAG(ts) OVER ()`: without an `ORDER BY`, SQL doesn't promise file order (a large file is scanned in parallel partitions), so the check could reject a sorted blend or accept an unsorted one.
 
    Report these numbers to the user; don't claim success on a completed workflow alone.
 
