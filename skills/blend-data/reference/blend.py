@@ -85,10 +85,6 @@ async def inspect_source(conn, dataset_id: str, tag: str, session_field: str,
     ds = await conn.get_dataset(dataset_id)
     head = (await ds.sql("SELECT * FROM my_table LIMIT 0", conn=conn)).table
     meta = json.loads((head.schema.metadata or {}).get(b"source_metadata", b"{}"))
-    # Generated datasets carry a session_field (e.g. session_key) that can be
-    # finer than the entity id: synthetic `job` values repeat across sessions.
-    # A blend written by this script has a session_key column its metadata
-    # doesn't name, so fall back to it before the entity id.
     if meta.get("desired_count"):
         # SQL re-attaches its input's metadata, so this count would reach the
         # union SQL's or the sort pass's DatasetSave and trim the whole blend
@@ -99,9 +95,17 @@ async def inspect_source(conn, dataset_id: str, tag: str, session_field: str,
             f"  local = await (await conn.get_dataset({dataset_id!r})).to_local(conn)\n"
             f"  meta = local.table_metadata(); meta.desired_count = None\n"
             f"  new_id = (await local.with_table_metadata(meta).to_remote(conn)).id")
-    basis = meta.get("session_field")
-    if basis not in head.column_names:
-        basis = SESSION_KEY if SESSION_KEY in head.column_names else session_field
+    # The session basis can be finer than the entity id: synthetic `job` values
+    # repeat across sessions. Prefer a session_key column (generated data and
+    # earlier blends have one; a blend's metadata may still name an input's
+    # coarser session_field such as job), then the metadata's session_field,
+    # then the entity id.
+    if SESSION_KEY in head.column_names:
+        basis = SESSION_KEY
+    elif meta.get("session_field") in head.column_names:
+        basis = meta["session_field"]
+    else:
+        basis = session_field
     if basis not in head.column_names:
         raise SystemExit(f"{dataset_id}: session field {basis!r} not in {head.column_names}")
     counts = (await ds.sql(
@@ -157,8 +161,13 @@ def validate(sources: list[Source], time_field: str, session_field: str, on_extr
                 problems.append(f"{f.name}: " + ", ".join(f"{k}={v}" for k, v in bad.items())
                                 + " (need a timestamp or an ISO 8601 string)")
                 continue
+            # Cast to the finest unit present so no input loses precision. A
+            # string may carry fractional seconds, so it counts as ns — the
+            # same precision check_time_strings' TRY_CAST parses at.
             stamped = [v for v in types.values() if pa.types.is_timestamp(v)]
-            target = stamped[0] if stamped else pa.timestamp("us", "UTC")
+            units = [v.unit for v in stamped] + ["ns"] * (len(types) - len(stamped))
+            unit = max(units, key=["s", "ms", "us", "ns"].index)
+            target = pa.timestamp(unit, stamped[0].tz if stamped else "UTC")
             if any(v != target for v in types.values()):
                 print(f"  {f.name}: casting " + ", ".join(f"{k}={v}" for k, v in types.items())
                       + f" to {target}")
