@@ -18,7 +18,10 @@ Use when the user wants synthetic tabular or time-series data with:
 - Realistic PII-like values (names, emails, addresses, SSNs, cards) that carry no real customer data.
 - OpenTelemetry telemetry — distributed-trace span trees from a service call graph, with correlated RED metrics and logs. See [OpenTelemetry span trees](#opentelemetry-span-trees).
 
-If the user wants to inject *incidents* (spikes, outages, ramps, sustained shifts) into an existing time-series dataset, use the `inject-incidents` skill instead.
+Use a different skill when:
+
+- The user **already has real data** and wants a synthetic stand-in that reproduces its distributions — `generate-from-data` trains a model on it instead of inventing rows from a description.
+- The user wants to inject *incidents* (spikes, outages, ramps, sustained shifts) into an existing time-series dataset — `inject-incidents`.
 
 ## Concept
 

@@ -13,3 +13,6 @@ output/
 
 # Codex review artifacts (local only)
 .codex-review/
+
+# Report cards written by reference scripts
+*-card.json

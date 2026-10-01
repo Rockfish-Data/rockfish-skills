@@ -1,10 +1,11 @@
 # Rockfish Skills
 
-A collection of [Claude Skills](https://claude.com/skills) for the [Rockfish](https://www.rockfish.ai/) SDK - a Python SDK for generating synthetic data. Install them into Claude Code (or another compatible agent) and it will reach for the right one when you ask it to generate synthetic data, blend datasets, inject time-series incidents, or analyze Snowflake tables.
+A collection of [Claude Skills](https://claude.com/skills) for the [Rockfish](https://www.rockfish.ai/) SDK - a Python SDK for generating synthetic data. Install them into Claude Code (or another compatible agent) and it will reach for the right one when you ask it to generate synthetic data, train a generative model on your own data, blend datasets, inject time-series incidents, or analyze Snowflake tables.
 
 | Skill | What it does |
 | --- | --- |
 | [`generate-from-schema`](skills/generate-from-schema/) | Generate synthetic tabular / time-series data from a schema (columns, state machines, foreign keys, PII-like values). |
+| [`generate-from-data`](skills/generate-from-data/) | Generate synthetic data from real data by training a model on it - analyze, set a quality target, prepare, train, generate, score, and iterate. |
 | [`inject-incidents`](skills/inject-incidents/) | Inject spikes, outages, ramps, and sustained shifts into a baseline time series, and build ground-truth test suites to evaluate analytics agents. |
 | [`blend-data`](skills/blend-data/) | Blend two or more datasets (e.g. real + synthetic time series) into one, with schema validation, unique session keys, mixing ratios, provenance, and time ordering. |
 | [`snowflake-analyst`](skills/snowflake-analyst/) | Explore and load Snowflake data like local CSVs - list, describe, sample, profile, query, and import - without dragging whole tables over the network. |
