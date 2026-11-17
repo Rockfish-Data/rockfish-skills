@@ -4,9 +4,11 @@
 
 ### Removed: `snowflake-analyst`
 
-The `snowflake-analyst` skill is gone: Claude now handles Snowflake exploration and
-loading out of the box. `snowflake-connector-python` and the `tomli` backport are no
-longer in `requirements.txt`; install them yourself if other code of yours needs them.
+The `snowflake-analyst` skill is gone. To explore and query Snowflake tables, connect
+Snowflake to [Claude Data](https://support.claude.com/en/articles/17454700-get-started-with-claude-data) instead. Claude Data
+reads and queries; it does not load data into Snowflake. `snowflake-connector-python` and
+the `tomli` backport are no longer in `requirements.txt`; install them yourself if other
+code of yours needs them.
 
 ### Added: `generate-from-data`
 

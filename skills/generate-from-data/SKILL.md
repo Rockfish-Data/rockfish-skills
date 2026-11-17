@@ -15,7 +15,7 @@ Use a different skill when:
 
 - The user has **no data or insufficient data** and wants rows invented from a described structure → `generate-from-schema`.
 - The user has a **baseline time series** and wants anomalies perturbed into it → `inject-incidents`.
-- The source table lives in **Snowflake** and needs exploring or loading first → do that with Claude's built-in Snowflake support, then come back here.
+- The source table lives in **Snowflake** and needs exploring first → query it with [Claude Data](https://support.claude.com/en/articles/17454700-get-started-with-claude-data) (connect Snowflake in claude.ai), then come back here.
 
 ## The loop
 
