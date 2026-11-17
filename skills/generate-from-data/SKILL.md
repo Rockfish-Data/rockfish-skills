@@ -1,6 +1,6 @@
 ---
 name: generate-from-data
-description: Generate synthetic data from real data by training a Rockfish model on it, then scoring the result and iterating. Use when a user has actual data (a CSV, a Snowflake table, a DataFrame) and wants a synthetic stand-in that reproduces its distributions, correlations, and session structure — as opposed to inventing rows from a schema. Covers the whole loop — profiling, setting a quality target before training, preprocessing, model selection across the GAN / transformer / SSM families, encoder and hyperparameter config, train and generate workflows, the Model Store, and fidelity / privacy / downstream-utility evaluation including the RFScore report card. Trigger on phrases like "synthetic version of this table", "train a model on my data", "fit a generative model", "make fake data that looks like this", "RF-Time-GAN", "DoppelGANger", "CTGAN", "REaLTabFormer", "TrainTimeSSM", "model store", "fidelity score", "RFScore", "is my synthetic data any good".
+description: Generate synthetic data from real data by training a Rockfish model on it, then scoring the result and iterating. Use when a user has actual data (a CSV, a Snowflake table, a dataset already in Rockfish, a DataFrame) and wants a synthetic stand-in that reproduces its distributions, correlations, and session structure — as opposed to inventing rows from a schema. Covers the whole loop — profiling, setting a quality target before training, preprocessing, model selection across the GAN / transformer / SSM families, encoder and hyperparameter config, train and generate workflows, the Model Store, and fidelity / privacy / downstream-utility evaluation including the RFScore report card. Trigger on phrases like "synthetic version of this table", "synthetic version of my Rockfish dataset", "train a model on my data", "fit a generative model", "make fake data that looks like this", "RF-Time-GAN", "DoppelGANger", "CTGAN", "REaLTabFormer", "TrainTimeSSM", "model store", "fidelity score", "RFScore", "is my synthetic data any good".
 ---
 
 # Generate from data
@@ -52,7 +52,11 @@ import rockfish.labs as rl
 
 conn = rf.Connection.from_config()          # ~/.config/rockfish/config.toml
 dataset = rf.Dataset.from_csv("finance", "finance.csv")
+# or, when the data is already in Rockfish:
+# remote = await rf.Dataset.from_id(conn, "<dataset id>")
 ```
+
+**Data already in Rockfish**, such as a dataset uploaded earlier, loads by id with `rf.Dataset.from_id`. A workflow reads that remote dataset in place (`builder.add_dataset(remote)`), so nothing is downloaded or uploaded again. Steps 1, 2, and 6 profile and score locally, so pull a copy for them with `dataset = await remote.to_local(conn)`. Other loaders: [`reference/pipeline.md`](reference/pipeline.md#loading-a-dataset).
 
 `Connection.from_config()` allows the user to store Rockfish configurations of different profiles in one place, out of the current repo. Alternatively, `Connection.from_env()` reads from the environment variables, `ROCKFISH_API_KEY` / `ROCKFISH_API_URL` / `ROCKFISH_PROJECT_ID` / `ROCKFISH_ORGANIZATION_ID` instead. 
 
