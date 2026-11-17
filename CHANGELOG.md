@@ -10,6 +10,9 @@ longer in `requirements.txt`; install them yourself if other code of yours needs
 
 ### Added: `generate-from-data`
 
+This entry was listed under 0.3.0, but the skill merged after 0.3.0 without a version
+bump, so installs of 0.3.0 never received it. It reaches them with 0.4.0.
+
 A skill for the other half of synthetic data: generating it from data you already have,
 rather than inventing rows from a schema. It is the counterpart to `generate-from-schema`,
 and the pair splits on one question - do you have data, or only a description of it?

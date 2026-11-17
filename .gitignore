@@ -19,4 +19,4 @@ output/
 
 # review-loop state (local only)
 .review-loop/
-.codex/
+.codex/review/
