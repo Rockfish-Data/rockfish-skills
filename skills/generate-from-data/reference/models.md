@@ -98,7 +98,7 @@ Where to start, by data shape:
 | Data / goal | Start with | Measured |
 | --- | --- | --- |
 | Categorical, mixed or high-cardinality; maximum fidelity | RF-eel | 0.896 vs 0.871 for the best baseline on the 29 categorical-heavy datasets; missingness structure 0.949 vs 0.907; wins on a 104k-level column and a 7k-level column |
-| Numeric-heavy (sensor, scientific, engineering) | RF-eel with improved numeric encoding (not exposed in the SDK today; with SDK defaults, follow the R4/R5 routing rules above) | Combined Cycle Power Plant 0.23 → 0.71, Wine Quality 0.47 → 0.87, Theorem Proving 0.37 → 0.70; overall 0.825 → 0.853 (before → after the improved numeric encoding) |
+| Numeric-heavy (sensor, scientific, engineering) | SSM (`TrainTabSSM`) with defaults, or whatever R4/R5 routing picks. The 0.853 below used RF-eel's improved numeric encoding, which the SDK does not expose today | Combined Cycle Power Plant 0.23 → 0.71, Wine Quality 0.47 → 0.87, Theorem Proving 0.37 → 0.70; overall 0.825 → 0.853 (before → after the improved numeric encoding) |
 | Large tables, fast iteration, tight budget | rtf2 (precision snap is optional, +0.010) | 0.799 at 11.8 GPU-h (0.809 with snap) vs 0.813 at 103.8 for the best baseline; on a 600k-row table 0.916 in 0.72 h vs 0.922 for rtf v1 in about 17 h |
 | Lowest-cost lightweight pipeline | Tab-GAN | 0.709 at 8.8 GPU-h |
 
