@@ -66,7 +66,8 @@ try:
 except ImportError as exc:  # pragma: no cover
     sys.exit(
         f"{exc}\n\nThis script needs rockfish[labs] with pandas/numpy:\n"
-        "    pip install -U 'rockfish[labs]' -f https://packages.rockfish.ai"
+        "    pip install -U 'rockfish[labs]'\n"
+        "(use the Rockfish package index as your find-links source)"
     )
 
 FAILURES: list[str] = []

@@ -55,8 +55,8 @@ except ImportError as exc:
         f"This example {verb} rockfish {MIN_SDK} (found: {_have}).\n"
         f"  {exc}\n"
         "Install or upgrade with:\n"
-        "  uv pip install --find-links https://packages.rockfish.ai "
-        "--upgrade 'rockfish[labs]'"
+        "  uv pip install --upgrade 'rockfish[labs]'\n"
+        "(use the Rockfish package index as your find-links source)"
     ) from exc
 
 

@@ -126,8 +126,9 @@ Besides the incident path, `rockfish.agentfuel` ships three pandas-based suite g
 
 ```sh
 pip install 'rockfish[agentfuel]'
-export ANTHROPIC_API_KEY=...
 ```
+
+Then set `ANTHROPIC_API_KEY` in your own environment.
 
 ## Reference
 
