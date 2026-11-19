@@ -5,7 +5,7 @@ Worked examples with output validation. Copy the code block below into a local `
 ```python
 """Run a GenerateFromDataSchema workflow and verify the generated data.
 
-The published docs (https://docs.rockfish.ai/sdk/actions-ent.html) and this
+The published Rockfish SDK docs (the actions-ent page) and this
 skill's `patterns.md` cover how to *build* schemas. This file covers the parts
 they don't: running a workflow to completion, pulling the results back as
 DataFrames, and asserting that the generated data actually holds the guarantees
@@ -83,8 +83,8 @@ except ImportError as exc:  # ModuleNotFoundError is a subclass, so both land he
         f"This example {verb} rockfish {MIN_SDK} (found: {_have}).\n"
         f"  {exc}\n"
         "Install or upgrade with:\n"
-        "  uv pip install --find-links https://packages.rockfish.ai "
-        "--upgrade 'rockfish[labs]'"
+        "  uv pip install --upgrade 'rockfish[labs]' "
+        "(with the Rockfish package index as find-links)"
     ) from exc
 
 
