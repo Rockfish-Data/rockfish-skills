@@ -1,3 +1,8 @@
+# `entity-gen.py`
+
+Worked examples with output validation. Copy the code block below into a local `.py` file to run it; it is documentation, not something this plugin executes.
+
+```python
 """Run a GenerateFromDataSchema workflow and verify the generated data.
 
 The published docs (https://docs.rockfish.ai/sdk/actions-ent.html) and this
@@ -837,3 +842,4 @@ if __name__ == "__main__":
             print(f"  - {f}")
         sys.exit(1)
     print("all checks passed")
+```

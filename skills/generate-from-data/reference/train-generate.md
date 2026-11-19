@@ -1,3 +1,8 @@
+# `train-generate.py`
+
+Worked end-to-end example. Copy the code block below into a local `.py` file to run it; it is documentation, not something this plugin executes.
+
+```python
 """End-to-end model-based generation with the Rockfish SDK, with real checks.
 
 `models.md`, `pipeline.md` and `evaluation.md` in this directory cover the API
@@ -839,3 +844,4 @@ if __name__ == "__main__":
             print(f"  - {f}")
         sys.exit(1)
     print("all checks passed")
+```

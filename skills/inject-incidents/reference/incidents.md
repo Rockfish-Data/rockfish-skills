@@ -1,3 +1,8 @@
+# `incidents.py`
+
+Worked incident-injection walkthrough. Copy the code block below into a local `.py` file to run it; it is documentation, not something this plugin executes.
+
+```python
 """Walkthrough of `rockfish.agentfuel` incident injection.
 
 Inject a synthetic incident into a time-series dataset, generate ground-truth
@@ -208,3 +213,4 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     ).parse_args()  # supports --help
     asyncio.run(main())
+```
