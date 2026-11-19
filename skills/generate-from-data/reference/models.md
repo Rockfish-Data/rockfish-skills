@@ -73,6 +73,8 @@ So, to iterate: **start with what `recommend()` chose**, and if the card disappo
 
 On cost: the GANs are the cheap ones. Beyond that, be careful drawing conclusions from wall-clock — a measured contrast in this repo (a tabular SSM taking hours where a time SSM on a larger table took minutes) turned out to be worker scheduling, not the model: the slow job had logged `CUDA not available`. Compare families on the same hardware or not at all. The benchmark below does this properly: every model on one 24 GB L4 per job.
 
+**`TrainTabTransformer` / `TrainTimeTransformer` (rtf v1) are superseded by the V2 actions.** Prefer rtf2 in new code and keep v1 only to reproduce an existing model; `dataset_profiler` already maps a `tab_transformer` / `time_transformer` decision onto the V2 actions.
+
 ### Tabular benchmark: TabQueryBench
 
 Rockfish benchmarks its tabular models on TabQueryBench, which scores a generator by whether its output answers the same SQL queries as the real table, not by how statistically similar it looks. **Tabular only** — it says nothing about the time-series families.
@@ -84,9 +86,9 @@ Setup: 45 datasets (TabQueryBench Tier 1), 100+ executable SQL queries per datas
 | Model | Overall query fidelity | GPU-hours (45 datasets) | Notes |
 | --- | --- | --- | --- |
 | RF-eel (improved preprocessing/encoding) | **0.853** | 29.5 | best overall |
-| RF-eel (as shipped) | 0.812 | — | on par with RF-RealTabFormer at about a third of the compute |
+| RF-eel (as shipped) | 0.812 | — (training cost is unchanged by the improvements; the 29.5 total is for the improved variant) | on par with RF-RealTabFormer at about a third of the compute |
 | RF-RealTabFormer (rtf v1) | 0.813 | 103.8 | best baseline; could not fit the 2.46M-row Census table even on an 80 GB A100 |
-| RF-rtf2 | 0.799 (0.809 with precision snap) | 11.8 | about 9x cheaper than rtf v1 for nearly the same fidelity |
+| RF-rtf2 | 0.799 as shipped; 0.809 with precision snap | 11.8 (for the 0.799 run) | about 9x cheaper than rtf v1 for nearly the same fidelity |
 | RF-ctg (Tab-GAN) | 0.709 | 8.8 | ahead of RF-CTGAN 0.609 and TVAE 0.595, which cost 16–20 GPU-h |
 
 RF-eel and RF-rtf2 finished all 45 datasets on one L4. The released diffusion baselines need roughly 52 h (tabbyflow) and 125 h (tabdiff) on one L4 for a 600k-row table.
@@ -96,8 +98,8 @@ Where to start, by data shape:
 | Data / goal | Start with | Measured |
 | --- | --- | --- |
 | Categorical, mixed or high-cardinality; maximum fidelity | RF-eel | 0.896 vs 0.871 for the best baseline on the 29 categorical-heavy datasets; missingness structure 0.949 vs 0.907; wins on a 104k-level column and a 7k-level column |
-| Numeric-heavy (sensor, scientific, engineering) | RF-eel with improved numeric encoding | Combined Cycle Power Plant 0.23 → 0.71, Wine Quality 0.47 → 0.87, Theorem Proving 0.37 → 0.70; overall 0.825 → 0.853 (before → after the improved numeric encoding) |
-| Large tables, fast iteration, tight budget | rtf2 (+ precision snap) | 0.809 at 11.8 GPU-h vs 0.813 at 103.8 for the best baseline; on a 600k-row table 0.916 in 0.72 h vs 0.922 for rtf v1 in about 17 h |
+| Numeric-heavy (sensor, scientific, engineering) | RF-eel with improved numeric encoding (not exposed in the SDK today; with SDK defaults, follow the R4/R5 routing rules above) | Combined Cycle Power Plant 0.23 → 0.71, Wine Quality 0.47 → 0.87, Theorem Proving 0.37 → 0.70; overall 0.825 → 0.853 (before → after the improved numeric encoding) |
+| Large tables, fast iteration, tight budget | rtf2 (precision snap is optional, +0.010) | 0.799 at 11.8 GPU-h (0.809 with snap) vs 0.813 at 103.8 for the best baseline; on a 600k-row table 0.916 in 0.72 h vs 0.922 for rtf v1 in about 17 h |
 | Lowest-cost lightweight pipeline | Tab-GAN | 0.709 at 8.8 GPU-h |
 
 Caveats when applying this:
@@ -107,8 +109,6 @@ Caveats when applying this:
 - **The "improved preprocessing and encoding" gains (+0.028 overall, up to about +0.5 on the most affected tables) were measured with RF-eel's production preprocessing and encoding pipeline.** Do not assume they are in the SDK defaults documented below, and do not expect the same lift by setting `type="categorical"` or `"continuous"` by hand. A separate generation fast path made RF-eel generation 3.8x faster end to end at the same quality; likewise not a documented SDK knob.
 - RF-eel appears at three scores: 0.812 as shipped, 0.825 just before the improved numeric encoding, and 0.853 after it. Compare like with like. The step from 0.812 to 0.825 has no per-step breakdown here.
 - Scores are SV2 query-centric fidelity, not the RFScore in the [report card](evaluation.md); the two are not interchangeable.
-
-**`TrainTabTransformer` / `TrainTimeTransformer` (rtf v1) are superseded by the V2 actions.** Prefer rtf2 in new code and keep v1 only to reproduce an existing model; `dataset_profiler` already maps a `tab_transformer` / `time_transformer` decision onto the V2 actions.
 
 ## The encoder config (shared by every model)
 
