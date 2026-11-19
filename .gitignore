@@ -16,3 +16,7 @@ output/
 
 # Report cards written by reference scripts
 *-card.json
+
+# review-loop state (local only)
+.review-loop/
+.codex/review/

@@ -1,20 +1,20 @@
 # Changelog
 
-## 0.3.0
+## 0.4.0 — breaking
 
-### Added: `blend-data`
+### Removed: `snowflake-analyst`
 
-A new [`blend-data`](skills/blend-data/) skill blends two or more datasets row-wise into
-one — typically real and synthetic time series — through a multi-parent workflow that
-feeds one `DatasetSave(concat_tables=True)`, or a single `UNION ALL` SQL action. The
-reference script validates schemas before starting a workflow, namespaces entity ids per
-source, regenerates globally unique session keys, optionally caps sessions per source,
-adds a provenance column, sorts by time, and verifies the result. The skill also
-documents SDK pitfalls hit along the way: opaque append failures on schema drift, stale
-session metadata passed through `SQL`, `drop_fields` ignored on append, and `Sample`
-rewriting field nullability.
+The `snowflake-analyst` skill is gone. To explore and query Snowflake tables, connect
+Snowflake to [Claude Data](https://support.claude.com/en/articles/17454700-get-started-with-claude-data) instead. Claude Data
+reads and queries; it does not load data into Snowflake. `snowflake-connector-python` and
+the `tomli` backport are no longer in `requirements.txt`; install them yourself if other
+code of yours needs them.
 
 ### Added: `generate-from-data`
+
+This entry was listed under 0.3.0, but the skill merged after 0.3.0 without a version
+bump, so installs of 0.3.0 never received it. It reaches them with 0.4.0, which also
+names a dataset already in Rockfish as a source: load it by id with `rf.Dataset.from_id`.
 
 A skill for the other half of synthetic data: generating it from data you already have,
 rather than inventing rows from a schema. It is the counterpart to `generate-from-schema`,
@@ -58,6 +58,20 @@ It also writes down two things the docs do not cover:
 `reference/train-generate.py` carries two examples, one per data shape, each walking the
 whole loop and stating why its model was chosen. Both train real models on a Rockfish
 backend and need credentials; verified against rockfish 0.82.2 on a live backend.
+
+## 0.3.0
+
+### Added: `blend-data`
+
+A new [`blend-data`](skills/blend-data/) skill blends two or more datasets row-wise into
+one — typically real and synthetic time series — through a multi-parent workflow that
+feeds one `DatasetSave(concat_tables=True)`, or a single `UNION ALL` SQL action. The
+reference script validates schemas before starting a workflow, namespaces entity ids per
+source, regenerates globally unique session keys, optionally caps sessions per source,
+adds a provenance column, sorts by time, and verifies the result. The skill also
+documents SDK pitfalls hit along the way: opaque append failures on schema drift, stale
+session metadata passed through `SQL`, `drop_fields` ignored on append, and `Sample`
+rewriting field nullability.
 
 ## 0.2.0 — breaking
 
