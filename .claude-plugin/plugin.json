@@ -7,5 +7,9 @@
     "url": "https://www.rockfish.ai/"
   },
   "homepage": "https://github.com/Rockfish-Data/rockfish-skills",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Rockfish-Data/rockfish-skills",
+  "privacyPolicyUrl": "https://www.rockfish.ai/privacy-policy",
+  "supportUrl": "https://github.com/Rockfish-Data/rockfish-skills/issues",
+  "documentationUrl": "https://docs.rockfish.ai"
 }
