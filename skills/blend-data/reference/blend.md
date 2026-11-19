@@ -1,3 +1,8 @@
+# `blend.py`
+
+Reference implementation for blending datasets. Copy the code block below into a local `.py` file to run it; it is documentation, not something this plugin executes.
+
+```python
 """Blend two or more time-series datasets into one Rockfish dataset.
 
 Reference implementation for the `blend-data` skill. Every input is inspected
@@ -484,3 +489,4 @@ if __name__ == "__main__":
     if len(args.dataset) < 2:
         p.error("need at least two --dataset")
     asyncio.run(main(args))
+```

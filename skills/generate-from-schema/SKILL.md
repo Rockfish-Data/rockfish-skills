@@ -187,7 +187,7 @@ Read these when you need detail beyond the tables above:
 - [`reference/schema-reference.md`](reference/schema-reference.md) — every class and field with types, defaults, and validation rules.
 - [`reference/data-models.md`](reference/data-models.md) — time-series vs tabular, and how metadata/measurement/timestamp/session key map onto `column_category_type`.
 - [`reference/patterns.md`](reference/patterns.md) — worked recipes (fan-out, whales, affinity, hierarchies, running counters, money, correlated FKs), row-count math, scaling, and a telecom RAN walkthrough.
-- [`reference/entity-gen.py`](reference/entity-gen.py) — runnable end-to-end examples with output validation.
+- [`reference/entity-gen.md`](reference/entity-gen.md) — end-to-end example code with output validation (copy into a local file to run).
 
 ## Gotchas
 

@@ -134,7 +134,7 @@ export ANTHROPIC_API_KEY=...
 Read these when you need detail beyond the tables above:
 
 - [`reference/api-reference.md`](reference/api-reference.md) — every class, field, default, and function contract in `rockfish.agentfuel`: incident configs and validation rules, test-case recipes per pattern, `Client` methods, the NL layer, all analytics/scenarios/stateful operators with their fields, and the timezone conventions.
-- [`reference/incidents.py`](reference/incidents.py) — runnable incident path end to end: baseline → spike injection → ground-truth test cases verified locally, then the same flow through `Client` when a Rockfish connection is configured, and NL phrasing/variations/grading when an Anthropic key is set. Exits non-zero if any check fails, so it works as a smoke test.
+- [`reference/incidents.md`](reference/incidents.md) — example code (copy into a local file to run) for the incident path end to end: baseline → spike injection → ground-truth test cases verified locally, then the same flow through `Client` when a Rockfish connection is configured, and NL phrasing/variations/grading when an Anthropic key is set. Exits non-zero if any check fails, so it works as a smoke test once saved locally.
 
 ## Gotchas
 

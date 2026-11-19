@@ -4,17 +4,13 @@ Thanks for your interest in contributing.
 
 ## Setting up
 
-This repo uses [uv](https://docs.astral.sh/uv/) to manage the environment. [Install it](https://docs.astral.sh/uv/getting-started/installation/), then:
+This repo uses [uv](https://docs.astral.sh/uv/) to manage the environment. [Install it](https://docs.astral.sh/uv/getting-started/installation/), clone the repo, create a virtual environment with `uv venv`, and activate it. Then install the SDK from the Rockfish package index:
 
 ```bash
-git clone https://github.com/Rockfish-Data/rockfish-skills.git
-cd rockfish-skills
-uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
+uv pip install "rockfish[labs]" --find-links https://packages.rockfish.ai
 ```
 
-`uv pip install` reads the `--find-links` line in `requirements.txt`, so `rockfish[labs]` resolves from the Rockfish package index automatically. You'll need a Rockfish account and a config file at `~/.config/rockfish/config.toml` to run examples that talk to the backend.
+You'll need a Rockfish account and a config file at `~/.config/rockfish/config.toml` to run examples that talk to the backend.
 
 ## Adding a new skill
 

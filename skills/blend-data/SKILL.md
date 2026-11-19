@@ -7,7 +7,7 @@ description: Blend two or more Rockfish datasets (typically time series — real
 
 Combine several datasets that describe the same kind of thing into one dataset — e.g. real `jobs` sessions plus synthetic `jobs` sessions — so the result can be trained on, evaluated, or shipped as a single table. Blending is **row-wise** (stack sessions from every input); joining columns is a different job (use `ra.SQL` with a `JOIN`).
 
-The reference implementation, [`reference/blend.py`](reference/blend.py), does the whole flow and is verified end-to-end against a Rockfish backend. Read it before writing blend code; adapt it rather than starting from scratch.
+The reference implementation, [`reference/blend.md`](reference/blend.md), does the whole flow and is verified end-to-end against a Rockfish backend. Read it before writing blend code; adapt it rather than starting from scratch.
 
 ## When to use this skill
 
@@ -33,7 +33,7 @@ Two things the sink cannot do: validate the inputs against each other (it just f
 
 ## Steps
 
-The skill's reference script runs these in order; each maps to a function in `blend.py`.
+The skill's reference script runs these in order; each maps to a function in `blend.md`'s code.
 
 1. **Inspect** (`inspect_source`) — for each input run `SELECT * FROM my_table LIMIT 0` via `RemoteDataset.sql(query, conn=conn)`. That returns the Arrow schema *and* the schema metadata without downloading rows. Read `source_metadata.session_field`: generated datasets carry one (e.g. `session_key`), and it can be finer than the entity id — in the `jobs` example, synthetic data has 85 distinct `job` values across 160 sessions. Pick the session basis in this order: a `session_key` column (generated data has one, and so does an earlier blend, whose metadata may still name a coarser input field such as `job`), then the metadata's `session_field`, then the user's entity field. Count rows and sessions with the same SQL call.
 2. **Validate** (`validate`) — compare schemas field by field, treating `string`/`large_string` (and `binary`/`large_binary`) as equal since parquet round trips flip them; the align SQL then casts both to `Utf8` (`Binary`) so the branches really match. Rules:
@@ -114,7 +114,7 @@ ra.SQL(
 )
 ```
 
-The first input comes from the `DatasetLoad` parent (`t0`); the rest are fetched by ID. The trade-off: the whole blend is materialized inside one action, and there is no per-branch `Sample`. Prefer the DAG for large inputs or mixing ratios; prefer `union` when the user wants one sorted dataset with no leftovers. `union_query` in `blend.py` builds this query generically.
+The first input comes from the `DatasetLoad` parent (`t0`); the rest are fetched by ID. The trade-off: the whole blend is materialized inside one action, and there is no per-branch `Sample`. Prefer the DAG for large inputs or mixing ratios; prefer `union` when the user wants one sorted dataset with no leftovers. `union_query` in `blend.md`'s code builds this query generically.
 
 ## Pitfalls (observed on the current SDK)
 
@@ -131,8 +131,10 @@ The first input comes from the `DatasetLoad` parent (`t0`); the rest are fetched
 
 ## Running the reference
 
+Save the code block from [`reference/blend.md`](reference/blend.md) as `blend.py`, then:
+
 ```bash
-python skills/blend-data/reference/blend.py \
+python blend.py \
     --dataset <id_a> --dataset <id_b> \
     --time-field ts --session-field job \
     --tags real,syn --name jobs-blended

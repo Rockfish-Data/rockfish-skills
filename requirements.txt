@@ -1,2 +1,0 @@
---find-links https://packages.rockfish.ai
-rockfish[labs]

@@ -283,4 +283,4 @@ Then drill down with `rl.metrics` per field, `rl.metrics.distance_to_closest_rec
 - [`reference/models.md`](reference/models.md) — every model family: selection criteria, complete config classes, verified hyperparameter defaults, and how the families differ in config shape.
 - [`reference/pipeline.md`](reference/pipeline.md) — the full API surface: profiling, property extraction, preprocessing, train and generate workflow graphs, the Model Store, and every way to shape the output.
 - [`reference/evaluation.md`](reference/evaluation.md) — the report card, per-field fidelity metrics and plots, privacy metrics and attacks, downstream utility, and what to change when a score is low.
-- [`reference/train-generate.py`](reference/train-generate.py) — a runnable end-to-end script: analyze → set the target → train → generate → score.
+- [`reference/train-generate.md`](reference/train-generate.md) — end-to-end example code (copy into a local file to run): analyze → set the target → train → generate → score.
